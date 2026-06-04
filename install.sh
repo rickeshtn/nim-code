@@ -20,10 +20,13 @@ CFG_FILE="$CONFIG_DIR/opencode.json"
 BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/nimcode"
 
-# When run from a clone, $SRC_DIR holds opencode.json next to this script.
-# When piped via curl, BASH_SOURCE[0] is /dev/stdin or empty; we download the
-# config from the upstream repo instead.
-if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/opencode.json" ]; then
+# Resolve where opencode.json lives.
+#   1. NIMCODE_SRC_DIR_OVERRIDE — used by the single-file installer (embedded copy)
+#   2. directory of this script — used when cloned
+#   3. empty -> download from upstream on the fly (curl|bash mode)
+if [ -n "${NIMCODE_SRC_DIR_OVERRIDE:-}" ] && [ -f "$NIMCODE_SRC_DIR_OVERRIDE/opencode.json" ]; then
+  SRC_DIR="$NIMCODE_SRC_DIR_OVERRIDE"
+elif [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/opencode.json" ]; then
   SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 else
   SRC_DIR=""

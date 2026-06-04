@@ -29,3 +29,6 @@ bench/stress_tests/99_refactor/service.py
 # Logs
 *.log
 .pytest_cache/
+
+# Built artifacts (the GH Actions release workflow regenerates these)
+dist/

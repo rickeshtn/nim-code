@@ -25,31 +25,51 @@ Under the hood it's [opencode](https://opencode.ai) with a preconfigured NIM pro
 
 ## Quick start
 
-### One-line install (recommended for new users)
+Three install paths, pick whichever fits.
+
+### A. Single-file installer (recommended for first-time users)
+
+Download one file from [Releases](https://github.com/natkal-coder/nim-code/releases/latest) and run it:
+
+```bash
+# (replace v0.1.0 with the latest release tag)
+curl -fsSLO https://github.com/natkal-coder/nim-code/releases/latest/download/nimcode-installer-v0.1.0.sh
+chmod +x nimcode-installer-v0.1.0.sh
+./nimcode-installer-v0.1.0.sh
+nimcode
+```
+
+`opencode.json` is embedded inside the file. No clone, no curl-pipe, works behind proxies.
+
+### B. One-liner (`curl | bash`)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/natkal-coder/nim-code/main/install.sh | bash
 nimcode
 ```
 
-That's it. The installer downloads its own `opencode.json` from the repo on the fly. Needs Node ≥20 and an `nvapi-...` key in `~/.nvidia_api_key` or `$NVIDIA_API_KEY` (else it'll prompt — but `curl | bash` has no tty, so save the key first):
+The installer downloads `opencode.json` from upstream on the fly.
 
-```bash
-# Save your key once, then run the one-liner
-printf '%s\n' 'nvapi-XXXXXXXX...' > ~/.nvidia_api_key
-chmod 600 ~/.nvidia_api_key
-curl -fsSL https://raw.githubusercontent.com/natkal-coder/nim-code/main/install.sh | bash
-```
-
-### Or clone + run
+### C. Clone + run (best for contributors)
 
 ```bash
 git clone https://github.com/natkal-coder/nim-code && cd nim-code
-./install.sh        # interactive prompt available
+./install.sh
 nimcode
 ```
 
-No Docker, no Python venv, no Node version manager. Plain bash + Node ≥20.
+### In every case: have your key ready
+
+`curl | bash` and the single-file installer can't show an interactive prompt (no tty when piped). Save your `nvapi-...` key first:
+
+```bash
+printf '%s\n' 'nvapi-XXXXXXXX...' > ~/.nvidia_api_key
+chmod 600 ~/.nvidia_api_key
+```
+
+The clone+run path can prompt you instead.
+
+Needs Node ≥20. No Docker, no Python venv, no version managers.
 
 ## Get a free NVIDIA API key
 

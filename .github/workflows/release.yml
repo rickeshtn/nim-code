@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: build single-file installer
+        run: ./tools/build_installer.sh
+
+      - name: verify it parses
+        run: bash -n dist/nimcode-installer.sh
+
+      - name: rename with tag
+        run: |
+          mv dist/nimcode-installer.sh "dist/nimcode-installer-${GITHUB_REF_NAME}.sh"
+          ls -la dist/
+
+      - name: upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/nimcode-installer-*.sh
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            # nim-code ${{ github.ref_name }}
+
+            **One-file install:**
+
+            ```bash
+            curl -fsSLO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/nimcode-installer-${{ github.ref_name }}.sh
+            chmod +x nimcode-installer-${{ github.ref_name }}.sh
+            ./nimcode-installer-${{ github.ref_name }}.sh
+            ```
+
+            Save your NVIDIA API key to `~/.nvidia_api_key` first, or have `$NVIDIA_API_KEY` set, or run from a normal shell to get an interactive prompt.
+
+            See [README](https://github.com/${{ github.repository }}#readme) and [`docs/benchmarks.md`](https://github.com/${{ github.repository }}/blob/main/docs/benchmarks.md) for full details.
