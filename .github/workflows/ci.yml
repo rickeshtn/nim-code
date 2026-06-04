@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck install.sh uninstall.sh bench/scripts/run_suite.sh bench/scripts/tool_call_smoke.sh || true
+          # Hard syntax check (always must pass)
+          bash -n install.sh
+          bash -n uninstall.sh
+          bash -n bench/scripts/run_suite.sh
+          bash -n bench/scripts/tool_call_smoke.sh
+
+      - name: python syntax
+        run: |
+          python3 -m py_compile bench/scripts/headless_agent.py
+
+      - name: opencode.json valid
+        run: |
+          python3 -c "import json; d=json.load(open('opencode.json')); assert 'provider' in d and 'nim' in d['provider'], 'opencode.json missing nim provider'; print('models:', list(d['provider']['nim']['models']))"
+
+      - name: telemetry worker syntax
+        run: |
+          # node syntax check; full deploy lives under telemetry/README.md
+          node --check telemetry/worker.js

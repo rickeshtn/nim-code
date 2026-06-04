@@ -1,0 +1,35 @@
+# Local secrets
+.env
+
+# Editor / session
+.claude/
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+
+# Bench artifacts
+bench/stress_tests/*/agent.log
+bench/stress_tests/*/__pycache__/
+bench/stress_tests/*/lru.py
+bench/stress_tests/*/toposort.py
+bench/stress_tests/*/rl.py
+bench/stress_tests/*/btree.py
+bench/stress_tests/*/mg.py
+bench/stress_tests/*/fixtures/
+bench/stress_tests/99_refactor/parser.py
+bench/stress_tests/99_refactor/validator.py
+bench/stress_tests/99_refactor/pricing.py
+bench/stress_tests/99_refactor/repo.py
+bench/stress_tests/99_refactor/notifier.py
+bench/stress_tests/99_refactor/service.py
+
+# Telemetry deploy artifacts
+telemetry/.wrangler/
+telemetry/node_modules/
+
+# Logs
+*.log
+.pytest_cache/
