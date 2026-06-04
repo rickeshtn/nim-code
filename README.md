@@ -33,7 +33,9 @@ curl -fsSL https://github.com/natkal-coder/nim-code/releases/latest/download/nim
 nimcode
 ```
 
-Done. Single-file installer (~12 KB, `opencode.json` baked in). Needs Node ≥20 — install LTS from <https://nodejs.org/> if you don't have it.
+Done. Single-file installer (~12 KB, `opencode.json` baked in). Works on **Linux and macOS** (Intel + Apple Silicon). Needs Node ≥20 — install LTS from <https://nodejs.org/> if you don't have it (or `brew install node` on macOS).
+
+> **macOS note:** `~/.local/bin` isn't on `PATH` by default. The installer warns about this and tells you what to add to `~/.zshrc`. If you'd rather, symlink `~/.local/bin/nimcode` to `/usr/local/bin/nimcode` (`sudo ln -s ~/.local/bin/nimcode /usr/local/bin/nimcode`) — but `~/.local/bin` on `PATH` is cleaner.
 
 ---
 

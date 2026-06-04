@@ -7,7 +7,12 @@ set -u
 MODEL="${MODEL:-meta/llama-3.3-70b-instruct}"
 MAX_TURNS="${MAX_TURNS:-15}"
 TASKS=(01_lru_cache 02_toposort 03_rate_limiter 04_btree 05_minigrep 99_refactor)
-SUITE_DIR="$(dirname "$(dirname "$(readlink -f "$0")")")/stress_tests"
+
+# Portable script-dir resolver (BSD readlink on macOS lacks -f).
+# Assumes the script is invoked by path, not via a hop through symlinks
+# multiple deep. Good enough for our use.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SUITE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/stress_tests"
 RUN_ROOT="/tmp/nim_suite_$(date +%s)"
 mkdir -p "$RUN_ROOT"
 SUMMARY="$RUN_ROOT/SUMMARY.md"

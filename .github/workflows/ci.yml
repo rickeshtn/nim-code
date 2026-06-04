@@ -7,19 +7,37 @@ on:
 
 jobs:
   static-checks:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Cover GNU userland (linux) AND BSD userland (macos) so portability
+        # bugs like `readlink -f` are caught in CI, not by a user.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: shellcheck
+      - name: install shellcheck (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+
+      - name: install shellcheck (macos)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
+
+      - name: shellcheck (informational) + hard syntax check
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y shellcheck
-          shellcheck install.sh uninstall.sh bench/scripts/run_suite.sh bench/scripts/tool_call_smoke.sh || true
-          # Hard syntax check (always must pass)
+          shellcheck install.sh uninstall.sh bench/scripts/run_suite.sh bench/scripts/tool_call_smoke.sh tools/build_installer.sh || true
+          # Hard checks (must pass)
           bash -n install.sh
           bash -n uninstall.sh
           bash -n bench/scripts/run_suite.sh
           bash -n bench/scripts/tool_call_smoke.sh
+          bash -n tools/build_installer.sh
+
+      - name: single-file installer builds
+        run: |
+          ./tools/build_installer.sh
+          bash -n dist/nimcode-installer.sh
 
       - name: python syntax
         run: |
