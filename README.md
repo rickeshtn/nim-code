@@ -23,53 +23,56 @@ $ nimcode
 
 Under the hood it's [opencode](https://opencode.ai) with a preconfigured NIM provider, an auto-validating installer, and a benchmark harness so you can prove the default model actually works before relying on it.
 
-## Quick start
+## TL;DR
 
-Three install paths, pick whichever fits.
-
-### A. Single-file installer (recommended for first-time users)
-
-Download one file from [Releases](https://github.com/natkal-coder/nim-code/releases/latest) and run it:
+Grab a free `nvapi-...` key from <https://build.nvidia.com> (any model → **Get API Key**), paste it into the first line below, then run all three:
 
 ```bash
-# (replace v0.1.0 with the latest release tag)
-curl -fsSLO https://github.com/natkal-coder/nim-code/releases/latest/download/nimcode-installer-v0.1.0.sh
-chmod +x nimcode-installer-v0.1.0.sh
-./nimcode-installer-v0.1.0.sh
+printf '%s\n' 'nvapi-PASTE_YOUR_KEY_HERE' > ~/.nvidia_api_key && chmod 600 ~/.nvidia_api_key
+curl -fsSL https://github.com/natkal-coder/nim-code/releases/latest/download/nimcode-installer.sh | bash
 nimcode
 ```
 
-`opencode.json` is embedded inside the file. No clone, no curl-pipe, works behind proxies.
+Done. Single-file installer (~12 KB, `opencode.json` baked in). Needs Node ≥20 — install LTS from <https://nodejs.org/> if you don't have it.
 
-### B. One-liner (`curl | bash`)
+---
+
+## Install paths (if the TL;DR doesn't fit)
+
+<details>
+<summary><b>One-liner from <code>main</code> (always tracks HEAD, may be unstable)</b></summary>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/natkal-coder/nim-code/main/install.sh | bash
 nimcode
 ```
 
-The installer downloads `opencode.json` from upstream on the fly.
+The installer downloads `opencode.json` from upstream on the fly. Useful when you want bleeding-edge config but accept that `main` can break.
+</details>
 
-### C. Clone + run (best for contributors)
+<details>
+<summary><b>Pinned single-file (for reproducible installs)</b></summary>
+
+Replace `v0.1.0` with the tag you want:
+
+```bash
+curl -fsSLO https://github.com/natkal-coder/nim-code/releases/download/v0.1.0/nimcode-installer-v0.1.0.sh
+chmod +x nimcode-installer-v0.1.0.sh
+./nimcode-installer-v0.1.0.sh
+```
+</details>
+
+<details>
+<summary><b>Clone + run (for contributors)</b></summary>
 
 ```bash
 git clone https://github.com/natkal-coder/nim-code && cd nim-code
-./install.sh
+./install.sh        # interactive prompt available — no need to pre-save the key
 nimcode
 ```
 
-### In every case: have your key ready
-
-`curl | bash` and the single-file installer can't show an interactive prompt (no tty when piped). Save your `nvapi-...` key first:
-
-```bash
-printf '%s\n' 'nvapi-XXXXXXXX...' > ~/.nvidia_api_key
-chmod 600 ~/.nvidia_api_key
-```
-
-The clone+run path can prompt you instead.
-
-Needs Node ≥20. No Docker, no Python venv, no version managers.
+This is the only path that can show an interactive key prompt (the piped paths have no tty).
+</details>
 
 ## Get a free NVIDIA API key
 

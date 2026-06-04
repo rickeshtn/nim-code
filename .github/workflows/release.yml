@@ -22,21 +22,33 @@ jobs:
       - name: verify it parses
         run: bash -n dist/nimcode-installer.sh
 
-      - name: rename with tag
+      - name: dual-name the artifact
+        # Upload both a versioned and a stable name so users can pin a version
+        # or always grab "latest" via a permanent URL.
         run: |
-          mv dist/nimcode-installer.sh "dist/nimcode-installer-${GITHUB_REF_NAME}.sh"
+          cp dist/nimcode-installer.sh "dist/nimcode-installer-${GITHUB_REF_NAME}.sh"
           ls -la dist/
 
       - name: upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/nimcode-installer-*.sh
+          files: |
+            dist/nimcode-installer.sh
+            dist/nimcode-installer-*.sh
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
             # nim-code ${{ github.ref_name }}
 
-            **One-file install:**
+            **Lazy install (always works, always latest):**
+
+            ```bash
+            printf '%s\n' 'nvapi-PASTE_YOUR_KEY_HERE' > ~/.nvidia_api_key && chmod 600 ~/.nvidia_api_key
+            curl -fsSL https://github.com/${{ github.repository }}/releases/latest/download/nimcode-installer.sh | bash
+            nimcode
+            ```
+
+            **Pinned to this version:**
 
             ```bash
             curl -fsSLO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/nimcode-installer-${{ github.ref_name }}.sh
@@ -44,6 +56,4 @@ jobs:
             ./nimcode-installer-${{ github.ref_name }}.sh
             ```
 
-            Save your NVIDIA API key to `~/.nvidia_api_key` first, or have `$NVIDIA_API_KEY` set, or run from a normal shell to get an interactive prompt.
-
-            See [README](https://github.com/${{ github.repository }}#readme) and [`docs/benchmarks.md`](https://github.com/${{ github.repository }}/blob/main/docs/benchmarks.md) for full details.
+            See [README](https://github.com/${{ github.repository }}#readme) and [`docs/benchmarks.md`](https://github.com/${{ github.repository }}/blob/main/docs/benchmarks.md) for details.
