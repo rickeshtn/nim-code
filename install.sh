@@ -1,21 +1,17 @@
 #!/usr/bin/env bash
 # nim-code installer
 # Installs the opencode CLI, drops a NIM-preconfigured opencode.json into
-# ~/.config/nim-code/, picks up your NVIDIA build.nvidia.com API key
-# (from $HOME/.nvidia_api_key, an existing env var, or an interactive
-# prompt), validates it live, and installs a `nimcode` launcher into
-# ~/.local/bin.
+# ~/.config/nim-code/, picks up your NVIDIA build.nvidia.com API key (from
+# $HOME/.nvidia_api_key, $NVIDIA_API_KEY, or an interactive prompt),
+# validates it live, and installs a `nimcode` launcher into ~/.local/bin.
+#
+# Works two ways:
+#   1. Clone-and-run:   git clone ... && ./install.sh
+#   2. One-line install: curl -fsSL https://raw.githubusercontent.com/natkal-coder/nim-code/main/install.sh | bash
 #
 # Re-running is safe (idempotent). Pass --reset to wipe stored key.
 set -euo pipefail
-trap '
-  rc=$?
-  printf "\033[31mxx\033[0m install.sh failed at line %d (exit %d)\n" "${LINENO}" "$rc" >&2
-  if [ -n "${POSTHOG_API_KEY:-}" ] && [ -d "${CONFIG_DIR:-}" ]; then
-    iid=$(cat "$CONFIG_DIR/install_id" 2>/dev/null) || iid=""
-    [ -n "$iid" ] && telemetry_send install_fail "$iid" || true
-  fi
-' ERR
+trap 'rc=$?; printf "\033[31mxx\033[0m install.sh failed at line %d (exit %d)\n" "${LINENO}" "$rc" >&2' ERR
 
 # ---------- paths ----------
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nim-code"
@@ -23,60 +19,23 @@ ENV_FILE="$CONFIG_DIR/env"
 CFG_FILE="$CONFIG_DIR/opencode.json"
 BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/nimcode"
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Canonical user-visible key file. We tell users to put their nvapi-... here.
+# When run from a clone, $SRC_DIR holds opencode.json next to this script.
+# When piped via curl, BASH_SOURCE[0] is /dev/stdin or empty; we download the
+# config from the upstream repo instead.
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/opencode.json" ]; then
+  SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  SRC_DIR=""
+fi
+
+# Canonical user-visible key file.
 KEY_FILE="$HOME/.nvidia_api_key"
 
 NIM_URL="https://integrate.api.nvidia.com/v1"
 DEFAULT_MODEL="moonshotai/kimi-k2.6"
 NIMCODE_VERSION="0.1.0"
-
-# --- telemetry (PostHog Cloud) ---
-# Maintainers: paste the Project API Key here to enable telemetry. Empty
-# string disables outbound ping entirely.
-# Get one free at https://posthog.com -> Project -> API Keys.
-# See telemetry/README.md for the full setup procedure.
-POSTHOG_API_KEY="phc_vBuMdENF5HnK6LdjimWvxdoMPPzHAGKBCYWSPKhMRWfG"
-POSTHOG_HOST="https://us.i.posthog.com"   # or https://eu.i.posthog.com
-
-# Users opt out via either:
-#   export NIMCODE_NO_TELEMETRY=1
-#   touch ~/.config/nim-code/no-telemetry
-telemetry_send() {
-  local event="$1"; local id="$2"
-  [ -n "${POSTHOG_API_KEY:-}" ] || return 0
-  [ -z "${NIMCODE_NO_TELEMETRY:-}" ] || return 0
-  [ ! -f "$CONFIG_DIR/no-telemetry" ] || return 0
-  local os arch
-  os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
-  arch=$(uname -m 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
-  curl -fsS --max-time 3 -o /dev/null \
-    -H 'Content-Type: application/json' \
-    -d "{
-      \"api_key\":\"$POSTHOG_API_KEY\",
-      \"event\":\"nimcode_$event\",
-      \"distinct_id\":\"$id\",
-      \"properties\":{\"version\":\"$NIMCODE_VERSION\",\"os\":\"$os\",\"arch\":\"$arch\"}
-    }" \
-    "$POSTHOG_HOST/i/v0/e/" 2>/dev/null || true
-}
-
-# Generate-or-load a random install id. Stored at $CONFIG_DIR/install_id.
-ensure_install_id() {
-  local f="$CONFIG_DIR/install_id"
-  if [ -f "$f" ]; then cat "$f"; return; fi
-  local id
-  if command -v uuidgen >/dev/null 2>&1; then
-    id=$(uuidgen | tr -d '-' | cut -c1-32)
-  else
-    id=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n' | cut -c1-32)
-  fi
-  mkdir -p "$CONFIG_DIR"
-  umask 077
-  printf '%s\n' "$id" > "$f"
-  printf %s "$id"
-}
+UPSTREAM_RAW="https://raw.githubusercontent.com/natkal-coder/nim-code/main"
 
 # ---------- ui ----------
 c_red=$'\033[31m'; c_grn=$'\033[32m'; c_ylw=$'\033[33m'; c_dim=$'\033[2m'; c_rst=$'\033[0m'
@@ -85,7 +44,6 @@ warn() { printf '%s!!%s %s\n'  "$c_ylw" "$c_rst" "$*" >&2; }
 die()  { printf '%sxx%s %s\n'  "$c_red" "$c_rst" "$*" >&2; exit 1; }
 
 mask() {
-  # show nvapi-XXXXXX...YYYY without revealing the middle
   local k="$1"
   if [ "${#k}" -lt 20 ]; then echo "(short key)"; return; fi
   echo "${k:0:12}...${k: -4}"
@@ -131,11 +89,16 @@ fi
 mkdir -p "$CONFIG_DIR" "$BIN_DIR"
 chmod 700 "$CONFIG_DIR"
 
-[ -f "$SRC_DIR/opencode.json" ] || die "opencode.json missing next to installer ($SRC_DIR). Re-clone the repo."
-cp "$SRC_DIR/opencode.json" "$CFG_FILE"
-say "installed config -> $CFG_FILE"
-
-INSTALL_ID="$(ensure_install_id)"
+if [ -n "$SRC_DIR" ]; then
+  cp "$SRC_DIR/opencode.json" "$CFG_FILE"
+  say "installed config -> $CFG_FILE (from local clone)"
+else
+  say "fetching opencode.json from $UPSTREAM_RAW"
+  if ! curl -fsSL --max-time 15 "$UPSTREAM_RAW/opencode.json" -o "$CFG_FILE"; then
+    die "could not download opencode.json from upstream. Check network or use the git-clone install path."
+  fi
+  say "installed config -> $CFG_FILE (from upstream)"
+fi
 
 # ---------- 4. resolve API key ----------
 # Priority:
@@ -143,7 +106,7 @@ INSTALL_ID="$(ensure_install_id)"
 #   1. $NVIDIA_API_KEY already exported in this shell
 #   2. $HOME/.nvidia_api_key   (recommended user-managed file, one line)
 #   3. previously installed $CONFIG_DIR/env
-#   4. interactive prompt -> offers to save to $HOME/.nvidia_api_key
+#   4. interactive prompt -> saves to $HOME/.nvidia_api_key
 KEY=""
 KEY_SOURCE=""
 
@@ -169,8 +132,11 @@ if [ -z "$KEY" ] && [ -f "$ENV_FILE" ]; then
   if [ -n "$k" ]; then KEY="$k"; KEY_SOURCE="$ENV_FILE (previous install)"; fi
 fi
 
-# 4. interactive prompt
+# 4. interactive prompt — only works when we have a tty
 if [ -z "$KEY" ]; then
+  if [ ! -t 0 ]; then
+    die "no key available and no tty for prompt. Set NVIDIA_API_KEY in env, OR put your key in $KEY_FILE before running, OR run install.sh from a normal shell."
+  fi
   cat <<EOF
 
 ${c_dim}---------------------------------------------------------------${c_rst}
@@ -193,7 +159,6 @@ EOF
   printf '\n'
   [ -n "$KEY" ] || die "no key entered"
   KEY_SOURCE="interactive prompt"
-  # Will be saved to $KEY_FILE in step 6 unconditionally.
 fi
 
 say "using key from: $KEY_SOURCE"
@@ -228,12 +193,7 @@ case "$http_code" in
 esac
 rm -f /tmp/nim-code-validate.json
 
-# ---------- 6. persist the resolved key, then write a trivial env file ----------
-# Design choice: COPY the resolved key into ~/.nvidia_api_key and have the env
-# file read only that. We do NOT source other env files at launch time —
-# external files can reference unset vars and break under the launcher's
-# strict mode. The cost: if you rotate the key elsewhere you must re-run
-# install.sh to refresh this copy.
+# ---------- 6. persist the resolved key + write env file ----------
 umask 077
 if [ ! -f "$KEY_FILE" ] || [ "$(head -n1 "$KEY_FILE" 2>/dev/null | tr -d '[:space:]')" != "$KEY" ]; then
   printf '%s\n' "$KEY" > "$KEY_FILE"
@@ -254,18 +214,7 @@ EOF
 chmod 600 "$ENV_FILE"
 say "wrote env reference -> $ENV_FILE (chmod 600)"
 
-# Write meta (version + telemetry config) for the launcher to read.
-cat > "$CONFIG_DIR/meta" <<EOF
-NIMCODE_VERSION="$NIMCODE_VERSION"
-POSTHOG_API_KEY="$POSTHOG_API_KEY"
-POSTHOG_HOST="$POSTHOG_HOST"
-EOF
-chmod 600 "$CONFIG_DIR/meta"
-
 # ---------- 7. launcher ----------
-# Heredoc is QUOTED so the launcher body is taken verbatim — no install-time
-# variable expansion inside. The launcher reads $CONFIG_DIR/meta at runtime
-# to learn its version and telemetry URL.
 cat > "$LAUNCHER" <<'LAUNCH'
 #!/usr/bin/env bash
 # nimcode — launch opencode CLI with the NIM-preconfigured provider.
@@ -273,7 +222,6 @@ set -euo pipefail
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nim-code"
 ENV_FILE="$CONFIG_DIR/env"
 CFG_FILE="$CONFIG_DIR/opencode.json"
-META_FILE="$CONFIG_DIR/meta"
 
 [ -f "$ENV_FILE" ] || { echo "nim-code: missing $ENV_FILE — run install.sh" >&2; exit 1; }
 [ -f "$CFG_FILE" ] || { echo "nim-code: missing $CFG_FILE — run install.sh" >&2; exit 1; }
@@ -281,7 +229,6 @@ META_FILE="$CONFIG_DIR/meta"
 set +eu
 # shellcheck disable=SC1090
 . "$ENV_FILE"
-[ -f "$META_FILE" ] && . "$META_FILE"
 set -eu
 
 command -v opencode >/dev/null 2>&1 || { echo "nim-code: opencode CLI not on PATH — run install.sh" >&2; exit 1; }
@@ -290,27 +237,6 @@ if [ -z "${NVIDIA_API_KEY:-}" ]; then
   echo "nim-code: NVIDIA_API_KEY not resolved from $ENV_FILE" >&2
   echo "          fix: put your key in \$HOME/.nvidia_api_key" >&2
   exit 1
-fi
-
-# First-run telemetry. Strict opt-outs: env var, marker file, or empty key.
-if [ -n "${POSTHOG_API_KEY:-}" ] \
-   && [ -z "${NIMCODE_NO_TELEMETRY:-}" ] \
-   && [ ! -f "$CONFIG_DIR/no-telemetry" ] \
-   && [ ! -f "$CONFIG_DIR/first_run_done" ] \
-   && [ -f "$CONFIG_DIR/install_id" ]; then
-  iid=$(cat "$CONFIG_DIR/install_id")
-  os=$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
-  arch=$(uname -m 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
-  curl -fsS --max-time 3 -o /dev/null \
-    -H 'Content-Type: application/json' \
-    -d "{
-      \"api_key\":\"$POSTHOG_API_KEY\",
-      \"event\":\"nimcode_first_run\",
-      \"distinct_id\":\"$iid\",
-      \"properties\":{\"version\":\"${NIMCODE_VERSION:-unknown}\",\"os\":\"$os\",\"arch\":\"$arch\"}
-    }" \
-    "${POSTHOG_HOST:-https://us.i.posthog.com}/i/v0/e/" 2>/dev/null || true
-  touch "$CONFIG_DIR/first_run_done"
 fi
 
 export OPENCODE_CONFIG="$CFG_FILE"
@@ -326,9 +252,6 @@ case ":$PATH:" in
      warn "Add this to ~/.bashrc or ~/.zshrc:"
      echo  "    export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
 esac
-
-# ---------- 9. telemetry ping (opt-out via NIMCODE_NO_TELEMETRY or $CONFIG_DIR/no-telemetry) ----------
-telemetry_send install_ok "$INSTALL_ID"
 
 # ---------- done ----------
 cat <<EOF

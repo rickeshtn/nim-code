@@ -29,7 +29,3 @@ jobs:
         run: |
           python3 -c "import json; d=json.load(open('opencode.json')); assert 'provider' in d and 'nim' in d['provider'], 'opencode.json missing nim provider'; print('models:', list(d['provider']['nim']['models']))"
 
-      - name: telemetry worker syntax
-        run: |
-          # node syntax check; full deploy lives under telemetry/README.md
-          node --check telemetry/worker.js

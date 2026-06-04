@@ -25,13 +25,31 @@ Under the hood it's [opencode](https://opencode.ai) with a preconfigured NIM pro
 
 ## Quick start
 
+### One-line install (recommended for new users)
+
 ```bash
-git clone https://github.com/rickeshtn/nim-code && cd nim-code
-./install.sh        # detects key in $NVIDIA_API_KEY or ~/.nvidia_api_key, else prompts
-nimcode             # launches the TUI
+curl -fsSL https://raw.githubusercontent.com/natkal-coder/nim-code/main/install.sh | bash
+nimcode
 ```
 
-That's the whole install path. No Docker, no Python venv, no Node version manager. Needs Node ≥20.
+That's it. The installer downloads its own `opencode.json` from the repo on the fly. Needs Node ≥20 and an `nvapi-...` key in `~/.nvidia_api_key` or `$NVIDIA_API_KEY` (else it'll prompt — but `curl | bash` has no tty, so save the key first):
+
+```bash
+# Save your key once, then run the one-liner
+printf '%s\n' 'nvapi-XXXXXXXX...' > ~/.nvidia_api_key
+chmod 600 ~/.nvidia_api_key
+curl -fsSL https://raw.githubusercontent.com/natkal-coder/nim-code/main/install.sh | bash
+```
+
+### Or clone + run
+
+```bash
+git clone https://github.com/natkal-coder/nim-code && cd nim-code
+./install.sh        # interactive prompt available
+nimcode
+```
+
+No Docker, no Python venv, no Node version manager. Plain bash + Node ≥20.
 
 ## Get a free NVIDIA API key
 
@@ -88,29 +106,9 @@ curl https://integrate.api.nvidia.com/v1/chat/completions \
 
 The headless agent harness under `bench/scripts/headless_agent.py` is a 270-line, dependency-free OpenAI-tool-call loop that another agent can copy and adapt — it exposes `write_file`, `read_file`, `run_bash`, `finish`. See [`AGENTS.md`](AGENTS.md) for the full agent integration surface.
 
-## Privacy / telemetry
+## Privacy
 
-nim-code ships with optional PostHog Cloud telemetry to count installs and first-runs (no PII). **Disabled in this upstream repo** unless the maintainer pastes a project API key. If active, payload per event is:
-
-| Field | Example |
-|---|---|
-| `distinct_id` | random UUID, stored at `~/.config/nim-code/install_id` |
-| `event` | `nimcode_install_ok` / `nimcode_install_fail` / `nimcode_first_run` |
-| `version` | `0.1.0` |
-| `os` | `linux` |
-| `arch` | `x86_64` |
-
-**Never sent:** API key, hostname, username, file paths.
-
-Opt out any time:
-
-```bash
-export NIMCODE_NO_TELEMETRY=1                       # session
-echo 'export NIMCODE_NO_TELEMETRY=1' >> ~/.bashrc    # permanent
-touch ~/.config/nim-code/no-telemetry                # alternative
-```
-
-Full disclosure + maintainer setup: [`telemetry/README.md`](telemetry/README.md).
+nim-code does **not** send any telemetry. The installer makes exactly one network call (validating your key against NIM's `/chat/completions`) and one optional call to download `opencode.json` if you used the `curl|bash` path. No usage data leaves your machine.
 
 ## Repo layout
 
@@ -123,7 +121,6 @@ Full disclosure + maintainer setup: [`telemetry/README.md`](telemetry/README.md)
 ├── docs/
 │   ├── benchmarks.md       # stress-suite methodology + results
 │   └── troubleshooting.md
-├── telemetry/              # optional PostHog wiring
 └── bench/                  # developer tooling — not needed to use nimcode
     ├── scripts/
     │   ├── headless_agent.py    # 270-line OpenAI tool-call loop

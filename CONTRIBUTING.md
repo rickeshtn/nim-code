@@ -22,14 +22,9 @@ CI runs these automatically (see `.github/workflows/ci.yml`).
 
 Change `model` at the top of `opencode.json`. Justify the swap by attaching a fresh bench run in the PR.
 
-## Telemetry changes
+## Adding network calls
 
-The telemetry payload is documented in `telemetry/README.md`. Any change that increases what is collected requires:
-- a CHANGELOG entry under the next version
-- the README's "Telemetry" section updated to match
-- the opt-out mechanism preserved
-
-The schema is intentionally narrow. Don't add hostnames, usernames, paths, or API keys.
+`install.sh` currently makes at most two outbound calls: one to NIM `/chat/completions` (key validation) and one to GitHub raw (`opencode.json` download, only on `curl|bash` mode). If your PR adds another call, document it in `README.md` under "Privacy" and justify it in the PR description.
 
 ## Coding style
 

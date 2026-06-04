@@ -26,10 +26,6 @@ bench/stress_tests/99_refactor/repo.py
 bench/stress_tests/99_refactor/notifier.py
 bench/stress_tests/99_refactor/service.py
 
-# Telemetry deploy artifacts
-telemetry/.wrangler/
-telemetry/node_modules/
-
 # Logs
 *.log
 .pytest_cache/

@@ -55,17 +55,3 @@ rm -f ~/.nvidia_api_key                 # forget the key file
 npm rm -g opencode-ai                   # remove the underlying CLI
 ```
 
-## Opting out of telemetry
-
-Pick any one:
-
-```bash
-# permanent, system-wide for your user
-touch ~/.config/nim-code/no-telemetry
-
-# permanent, in your shell rc
-echo 'export NIMCODE_NO_TELEMETRY=1' >> ~/.bashrc
-
-# verify by checking the install_id file is the only thing in the dir that grew
-ls -la ~/.config/nim-code/
-```

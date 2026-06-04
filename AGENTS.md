@@ -45,9 +45,6 @@ Opencode supports headless / piped invocation modes — see <https://opencode.ai
 |---|---|---|
 | `~/.config/nim-code/opencode.json` | end user | provider catalog + default model |
 | `~/.config/nim-code/env` | installer | exports `NVIDIA_API_KEY` |
-| `~/.config/nim-code/meta` | installer | version + (optional) PostHog config |
-| `~/.config/nim-code/install_id` | installer | random UUID for telemetry |
-| `~/.config/nim-code/no-telemetry` | end user (`touch`) | hard opt-out marker |
 
 Agents should never read or write `~/.nvidia_api_key` directly — go through the env file.
 
@@ -92,14 +89,9 @@ python3 bench/scripts/headless_agent.py \
 4. **HTTP 503 ResourceExhausted** — Server-side capacity. Switch model; not your quota.
 5. **HTTP 504 / 60-second hang** — Endpoint cold-shed or deprecated. Drop the model.
 
-## Telemetry boundary
+## Network behavior
 
-Nothing the agent does at runtime triggers a telemetry event. The only telemetry events are:
-
-- `nimcode_install_ok` / `nimcode_install_fail` — emitted by `install.sh` once.
-- `nimcode_first_run` — emitted by the launcher once per fresh install.
-
-If your agent runs `./install.sh` programmatically, you can set `NIMCODE_NO_TELEMETRY=1` in the env to suppress.
+`nim-code` makes no telemetry calls. `install.sh` makes one HTTPS call to validate the API key against NIM `/chat/completions`, and a second call to fetch `opencode.json` only when run via `curl | bash` (no local copy present). The `nimcode` launcher itself makes no outbound calls beyond what opencode does to talk to NIM.
 
 ## Recommended discovery tags for other agents
 
