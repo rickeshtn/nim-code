@@ -32,3 +32,5 @@ bench/stress_tests/99_refactor/service.py
 
 # Built artifacts (the GH Actions release workflow regenerates these)
 dist/
+
+.trio/

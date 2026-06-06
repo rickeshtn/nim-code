@@ -161,6 +161,34 @@ nim-code does **not** send any telemetry. The installer makes exactly one networ
 - **Free-tier rate limits**: ~40 RPM per key. Heavy use needs paid NIM or self-hosted NIM container.
 - **Some catalog-listed models are unusable.** Endpoint health and tool-call format compatibility vary — `bench/scripts/tool_call_smoke.sh <model>` filters them.
 
+## Stay under NIM's 40 RPM rate limit
+
+NIM free tier caps at ~40 requests/minute per key. Agent loops can burst above that and get 429'd mid-run. Two options:
+
+**A. Single command — `nimcode-safe`** (recommended for heavy iterative use):
+
+```bash
+# uses your NVIDIA_API_KEY, throttles to 38 RPM, never sees a 429
+~/Projects/NIM_claude_code/tools/nimcode-safe
+
+# or with multiple keys, round-robin (combined 76 RPM under 40-per-key)
+NIM_KEYS="nvapi-A...,nvapi-B..." ~/Projects/NIM_claude_code/tools/nimcode-safe
+```
+
+It starts a local rate-limit proxy (`tools/nim_proxy.py`), writes a throttled variant of your `opencode.json` pointing at the proxy, and launches opencode. When the bucket is empty, requests **queue and wait** rather than fail. The proxy shuts down when you exit.
+
+**B. Run the proxy yourself + point opencode at it manually:**
+
+```bash
+NIM_KEYS="nvapi-A...,nvapi-B..." python3 tools/nim_proxy.py &
+# then edit ~/.config/nim-code/opencode.json:
+#   "baseURL": "http://127.0.0.1:8123/v1"
+```
+
+Knobs: `NIM_PROXY_PORT` (default 8123), `NIM_RPM` (default 38 per key), `NIM_UPSTREAM` (default integrate.api.nvidia.com).
+
+The proxy is Python stdlib only — no `pip install` needed. ~250 lines.
+
 ## Troubleshooting
 
 [`docs/troubleshooting.md`](docs/troubleshooting.md) covers: `EACCES` on global npm install, `nimcode: command not found`, 401/429/503 from NIM, broken tool-call models, and resetting everything.

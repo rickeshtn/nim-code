@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# nimcode-safe — launch nimcode with the local rate-limit proxy in front of NIM.
+# Stays under 40 RPM per key so agent loops never get 429'd. Slower, never fails.
+#
+# Usage:
+#   nimcode-safe            # uses NVIDIA_API_KEY (1 key, 38 RPM)
+#   NIM_KEYS="a,b" nimcode-safe   # multi-key round-robin (76 RPM combined)
+#   NIM_RPM=60 nimcode-safe       # override per-key rate (only useful on paid endpoints)
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nim-code"
+SAFE_CONFIG="$CONFIG_DIR/opencode.safe.json"
+ORIG_CONFIG="$CONFIG_DIR/opencode.json"
+PROXY_LOG="$CONFIG_DIR/nim_proxy.log"
+PROXY_PORT="${NIM_PROXY_PORT:-8123}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+[ -f "$ORIG_CONFIG" ] || { echo "nimcode-safe: $ORIG_CONFIG missing — run install.sh first" >&2; exit 1; }
+[ -f "$SCRIPT_DIR/nim_proxy.py" ] || { echo "nimcode-safe: nim_proxy.py not next to launcher" >&2; exit 1; }
+
+set +eu
+# shellcheck disable=SC1090
+. "$CONFIG_DIR/env"
+set -eu
+[ -n "${NVIDIA_API_KEY:-}" ] || [ -n "${NIM_KEYS:-}" ] \
+  || { echo "nimcode-safe: no NVIDIA_API_KEY or NIM_KEYS in env" >&2; exit 1; }
+
+# Build a throttled opencode.json variant: same as original but baseURL points at the proxy.
+python3 - <<EOF > "$SAFE_CONFIG"
+import json
+d = json.load(open("$ORIG_CONFIG"))
+d["provider"]["nim"]["options"]["baseURL"] = "http://127.0.0.1:$PROXY_PORT/v1"
+print(json.dumps(d, indent=2))
+EOF
+chmod 600 "$SAFE_CONFIG"
+
+# Start the proxy in background
+python3 "$SCRIPT_DIR/nim_proxy.py" > "$PROXY_LOG" 2>&1 &
+PROXY_PID=$!
+trap 'kill $PROXY_PID 2>/dev/null; rm -f "$SAFE_CONFIG"; exit' EXIT INT TERM
+
+# Wait for it to be reachable
+for i in 1 2 3 4 5; do
+  if curl -sS --max-time 1 "http://127.0.0.1:$PROXY_PORT/" >/dev/null 2>&1; then break; fi
+  sleep 0.3
+done
+
+echo ">> proxy up (pid=$PROXY_PID, log=$PROXY_LOG)"
+echo ">> launching opencode with throttled config..."
+
+# Launch opencode pointed at the proxy.
+export OPENCODE_CONFIG="$SAFE_CONFIG"
+opencode "$@"
