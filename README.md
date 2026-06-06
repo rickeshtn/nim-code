@@ -25,17 +25,31 @@ Under the hood it's [opencode](https://opencode.ai) with a preconfigured NIM pro
 
 ## TL;DR
 
-Grab a free `nvapi-...` key from <https://build.nvidia.com> (any model → **Get API Key**), paste it into the first line below, then run all three:
+Grab a free `nvapi-...` key from <https://build.nvidia.com> (any model → **Get API Key**), then:
 
 ```bash
+# Single key (most users)
 printf '%s\n' 'nvapi-PASTE_YOUR_KEY_HERE' > ~/.nvidia_api_key && chmod 600 ~/.nvidia_api_key
 curl -fsSL https://github.com/natkal-coder/nim-code/releases/latest/download/nimcode-installer.sh | bash
 nimcode
 ```
 
-Done. Single-file installer (~12 KB, `opencode.json` baked in). Works on **Linux and macOS** (Intel + Apple Silicon). Needs Node ≥20 — install LTS from <https://nodejs.org/> if you don't have it (or `brew install node` on macOS).
+**Have two keys (e.g. from two NVIDIA accounts)?** Same flow, just put both keys in the file — one per line. The installer detects multi-key automatically and the proxy round-robins between them for ~80 RPM combined:
 
-> **macOS note:** `~/.local/bin` isn't on `PATH` by default. The installer warns about this and tells you what to add to `~/.zshrc`. If you'd rather, symlink `~/.local/bin/nimcode` to `/usr/local/bin/nimcode` (`sudo ln -s ~/.local/bin/nimcode /usr/local/bin/nimcode`) — but `~/.local/bin` on `PATH` is cleaner.
+```bash
+# Two keys → ~80 RPM combined (each stays under per-key 40 RPM cap)
+cat > ~/.nvidia_api_key <<'EOF'
+nvapi-FIRST_KEY_HERE
+nvapi-SECOND_KEY_HERE
+EOF
+chmod 600 ~/.nvidia_api_key
+curl -fsSL https://github.com/natkal-coder/nim-code/releases/latest/download/nimcode-installer.sh | bash
+nimcode
+```
+
+Done. Single-file installer (~24 KB, `opencode.json` + rate-limit proxy baked in). Works on **Linux and macOS** (Intel + Apple Silicon). Needs Node ≥20 (`nodejs.org` LTS or `brew install node`) and Python ≥3.8.
+
+> **macOS note:** `~/.local/bin` isn't on `PATH` by default. The installer warns and tells you what to add to `~/.zshrc`. Or symlink: `sudo ln -s ~/.local/bin/nimcode /usr/local/bin/nimcode`.
 
 ---
 
@@ -176,19 +190,29 @@ Implementation: `~/.config/nim-code/nim_proxy.py` (Python stdlib only, ~280 line
 
 ### Multi-key setup (~80 RPM combined)
 
-If you have two `nvapi-...` keys (e.g., from two separate NVIDIA accounts), pass them as a comma-separated env var. The proxy will round-robin across them so combined effective RPM is the sum, while each key stays under the 40 RPM per-key cap.
+If you have two or more `nvapi-...` keys (one per NVIDIA developer account), put each on its own line in `~/.nvidia_api_key`:
 
 ```bash
-NIM_KEYS="nvapi-FIRST_KEY,nvapi-SECOND_KEY" nimcode
+cat > ~/.nvidia_api_key <<'EOF'
+nvapi-FIRST_KEY_HERE
+nvapi-SECOND_KEY_HERE
+EOF
+chmod 600 ~/.nvidia_api_key
+./install.sh   # re-run to refresh — env file detects multi-key automatically
+nimcode
 ```
 
-Or set it permanently in your shell rc:
+Comma-separated on one line also works (`nvapi-A,nvapi-B`). Comments (`#`) and blank lines are ignored.
+
+The proxy round-robins across them — effective RPM = N × per-key cap, with each key staying under NVIDIA's 40 RPM limit independently.
+
+If you'd rather not put keys in a file, set `NIM_KEYS` as an env var instead:
 
 ```bash
-echo 'export NIM_KEYS="nvapi-FIRST...,nvapi-SECOND..."' >> ~/.bashrc
+NIM_KEYS="nvapi-FIRST,nvapi-SECOND" nimcode
 ```
 
-When `NIM_KEYS` is set, the single `~/.nvidia_api_key` file is ignored.
+`NIM_KEYS` (env) overrides `~/.nvidia_api_key` (file) when both are set.
 
 **Honest note:** Getting multiple NIM keys requires multiple NVIDIA developer accounts (each phone-verified). That's friction NVIDIA imposes, not something nim-code can shortcut.
 

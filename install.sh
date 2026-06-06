@@ -37,7 +37,7 @@ KEY_FILE="$HOME/.nvidia_api_key"
 
 NIM_URL="https://integrate.api.nvidia.com/v1"
 DEFAULT_MODEL="moonshotai/kimi-k2.6"
-NIMCODE_VERSION="0.2.0"
+NIMCODE_VERSION="0.2.1"
 UPSTREAM_RAW="https://raw.githubusercontent.com/natkal-coder/nim-code/main"
 
 # ---------- ui ----------
@@ -160,10 +160,29 @@ if [ -z "$KEY" ] && [ -n "${NVIDIA_API_KEY:-}" ]; then
   KEY="$NVIDIA_API_KEY"; KEY_SOURCE="\$NVIDIA_API_KEY in your shell"
 fi
 
-# 2. $HOME/.nvidia_api_key
+# 2. $HOME/.nvidia_api_key — supports single key OR multiple keys (one per
+#    line, or comma-separated on one line). Comments (#) and blanks are
+#    ignored. If multiple keys are found, they're stored as NIM_KEYS at runtime
+#    for the proxy's round-robin; the first key is used for the install-time
+#    validation call.
+#
+# IMPORTANT: per-line whitespace strip uses `sed 's/[[:space:]]//g'` rather
+# than `tr -d '[:space:]'` — the latter strips newlines too, concatenating
+# multi-line keys into one string.
 if [ -z "$KEY" ] && [ -f "$KEY_FILE" ]; then
-  k=$(head -n1 "$KEY_FILE" | tr -d '[:space:]')
-  if [ -n "$k" ]; then KEY="$k"; KEY_SOURCE="$KEY_FILE"; fi
+  ALL_KEYS=$(grep -vE '^[[:space:]]*(#|$)' "$KEY_FILE" \
+             | tr ',' '\n' \
+             | sed 's/[[:space:]]//g' \
+             | grep -E '^nvapi-' || true)
+  if [ -n "$ALL_KEYS" ]; then
+    KEY=$(printf '%s\n' "$ALL_KEYS" | head -n1)
+    n_keys=$(printf '%s\n' "$ALL_KEYS" | wc -l | tr -d ' ')
+    if [ "$n_keys" -gt 1 ]; then
+      KEY_SOURCE="$KEY_FILE ($n_keys keys → multi-key round-robin)"
+    else
+      KEY_SOURCE="$KEY_FILE"
+    fi
+  fi
 fi
 
 # 3. previously installed env (skip if --reset above already removed it)
@@ -245,10 +264,27 @@ fi
 
 cat > "$ENV_FILE" <<EOF
 # nim-code env — single source of truth: $KEY_FILE
-# Re-run install.sh after rotating the key to refresh this copy.
+#
+# Reads one or more nvapi- keys from $KEY_FILE (one per line, OR
+# comma-separated on one line). Comments (#) and blank lines are ignored.
+#
+# If exactly one key is found, exports NVIDIA_API_KEY.
+# If multiple keys are found, exports BOTH NVIDIA_API_KEY (for back-compat)
+# and NIM_KEYS (comma-separated, used by the proxy for round-robin).
+#
+# Re-run install.sh after editing $KEY_FILE; this env file is regenerated.
 if [ -r "$KEY_FILE" ]; then
-  NVIDIA_API_KEY="\$(head -n1 "$KEY_FILE" | tr -d '[:space:]')"
-  export NVIDIA_API_KEY
+  __nimcode_keys=\$(grep -vE '^[[:space:]]*(#|\$)' "$KEY_FILE" 2>/dev/null \\
+                   | tr ',' '\\n' \\
+                   | sed 's/[[:space:]]//g' \\
+                   | grep -E '^nvapi-' \\
+                   | paste -sd, -)
+  if [ -n "\$__nimcode_keys" ]; then
+    NIM_KEYS="\$__nimcode_keys"
+    NVIDIA_API_KEY="\${NIM_KEYS%%,*}"   # first key, for single-key tools
+    export NIM_KEYS NVIDIA_API_KEY
+  fi
+  unset __nimcode_keys
 fi
 EOF
 chmod 600 "$ENV_FILE"
