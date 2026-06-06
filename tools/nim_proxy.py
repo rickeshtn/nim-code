@@ -37,11 +37,12 @@ import urllib.request
 from typing import Optional
 
 # --- config ---
-LISTEN_HOST  = os.environ.get("NIM_PROXY_HOST", "127.0.0.1")
-LISTEN_PORT  = int(os.environ.get("NIM_PROXY_PORT", "8123"))
-UPSTREAM     = os.environ.get("NIM_UPSTREAM", "https://integrate.api.nvidia.com")
-RPM          = int(os.environ.get("NIM_RPM", "38"))   # per-key. NVIDIA limit is 40.
-LOG_LEVEL    = os.environ.get("NIM_PROXY_LOG", "INFO")
+LISTEN_HOST   = os.environ.get("NIM_PROXY_HOST", "127.0.0.1")
+LISTEN_PORT   = int(os.environ.get("NIM_PROXY_PORT", "8123"))
+UPSTREAM      = os.environ.get("NIM_UPSTREAM", "https://integrate.api.nvidia.com")
+RPM           = int(os.environ.get("NIM_RPM", "38"))    # per-key. NVIDIA cap is 40.
+MIN_INTERVAL  = float(os.environ.get("NIM_MIN_INTERVAL", "5"))  # seconds between calls per key
+LOG_LEVEL     = os.environ.get("NIM_PROXY_LOG", "INFO")
 
 # Keys: prefer NIM_KEYS (comma-separated) for round-robin; fall back to
 # NVIDIA_API_KEY (single). Strip whitespace, drop empties, dedupe (preserve order).
@@ -110,6 +111,39 @@ class TokenBucket:
 BUCKETS = {k: TokenBucket(capacity=RPM, rate_per_sec=RPM / 60.0) for k in KEYS}
 
 
+class MinIntervalGate:
+    """Per-key serializing gate: at most one request through every `interval`
+    seconds. Set NIM_MIN_INTERVAL=0 to disable. Defense in depth on top of the
+    token bucket — useful when users want strict pacing regardless of bucket
+    state (e.g. agent recursion loops that should pause between turns)."""
+    def __init__(self, interval: float):
+        self.interval = max(0.0, interval)
+        self.lock = threading.Lock()
+        self.last_release = 0.0   # monotonic time of last grant
+
+    def acquire(self, key_id: str = "?") -> float:
+        """Block until this gate is ready. Returns wait time in seconds."""
+        if self.interval <= 0:
+            return 0.0
+        t0 = time.monotonic()
+        with self.lock:
+            now = time.monotonic()
+            since = now - self.last_release
+            if since < self.interval:
+                wait = self.interval - since
+                # Hold the lock while sleeping so other requests for THIS key
+                # are also gated.
+                time.sleep(wait)
+            self.last_release = time.monotonic()
+            waited = time.monotonic() - t0
+            if waited > 0.05:
+                log.info(f"[{key_id}] gate held {waited*1000:.0f}ms (interval={self.interval}s)")
+            return waited
+
+
+GATES = {k: MinIntervalGate(MIN_INTERVAL) for k in KEYS}
+
+
 # --- round-robin key selector ---
 class KeyRouter:
     """Atomic round-robin across configured keys."""
@@ -140,10 +174,12 @@ class Proxy(http.server.BaseHTTPRequestHandler):
         pass
 
     def _proxy(self):
-        # Pick a key and acquire a token from its bucket
+        # Pick a key, acquire a token, AND wait the min-interval gate.
+        # Two layers: bucket (RPM cap) + gate (strict pacing between calls).
         key = router.next()
         kid = _key_id(key)
         BUCKETS[key].acquire(1, kid)
+        GATES[key].acquire(kid)
 
         # Build upstream request
         upstream_url = f"{UPSTREAM}{self.path}"
@@ -209,7 +245,20 @@ class Proxy(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": f"proxy: {e}"}).encode())
 
-    def do_GET(self):  self._proxy()
+    def _health(self):
+        """Local health endpoint — DO NOT forward upstream. Used by the
+        nimcode launcher to verify the proxy is reachable before pointing
+        opencode at it."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"nim-code proxy ok\n")
+
+    def do_GET(self):
+        if self.path in ("/", "/health"):
+            self._health()
+        else:
+            self._proxy()
     def do_POST(self): self._proxy()
     def do_PUT(self):  self._proxy()
 
@@ -222,7 +271,8 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
 def main():
     log.info(f"NIM rate-limit proxy listening on http://{LISTEN_HOST}:{LISTEN_PORT}")
     log.info(f"upstream: {UPSTREAM}")
-    log.info(f"keys: {len(KEYS)} configured  ->  effective RPM: {RPM * len(KEYS)}")
+    log.info(f"keys: {len(KEYS)} configured  ->  effective RPM: {RPM * len(KEYS)} (token bucket)")
+    log.info(f"min interval per key: {MIN_INTERVAL}s (NIM_MIN_INTERVAL=0 disables)")
     for k in KEYS:
         log.info(f"  - {_key_id(k)}  bucket={RPM} RPM")
     log.info("point opencode at:  baseURL = http://%s:%d/v1", LISTEN_HOST, LISTEN_PORT)

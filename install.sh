@@ -37,7 +37,7 @@ KEY_FILE="$HOME/.nvidia_api_key"
 
 NIM_URL="https://integrate.api.nvidia.com/v1"
 DEFAULT_MODEL="moonshotai/kimi-k2.6"
-NIMCODE_VERSION="0.1.0"
+NIMCODE_VERSION="0.2.0"
 UPSTREAM_RAW="https://raw.githubusercontent.com/natkal-coder/nim-code/main"
 
 # ---------- ui ----------
@@ -67,7 +67,7 @@ EOF
   esac
 done
 
-# ---------- 1. node + npm ----------
+# ---------- 1. node + npm + python ----------
 if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
   die "Node.js (>=20) and npm are required. Install from https://nodejs.org/ then re-run."
 fi
@@ -75,6 +75,12 @@ node_major=$(node -p 'process.versions.node.split(".")[0]')
 if [ "$node_major" -lt 20 ]; then
   die "Node $node_major is too old. Need >=20."
 fi
+# Python is required for the local rate-limit proxy (stdlib only — no pip install).
+if ! command -v python3 >/dev/null 2>&1; then
+  die "Python 3 is required (used by the rate-limit proxy). Install python3 then re-run."
+fi
+py_ok=$(python3 -c 'import sys; print(1 if sys.version_info >= (3,8) else 0)')
+[ "$py_ok" = "1" ] || die "Python >=3.8 required. You have $(python3 -V 2>&1)."
 
 # ---------- 2. opencode CLI ----------
 if ! command -v opencode >/dev/null 2>&1; then
@@ -102,6 +108,37 @@ else
   fi
   say "installed config -> $CFG_FILE (from upstream)"
 fi
+
+# Opencode v1.15+ reads its config from ~/.config/opencode/opencode.json (the
+# OPENCODE_CONFIG env var is ignored). Mirror our config there so opencode
+# actually picks it up. Back up any existing user config first.
+OPENCODE_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+OPENCODE_CFG="$OPENCODE_CFG_DIR/opencode.json"
+mkdir -p "$OPENCODE_CFG_DIR"
+if [ -f "$OPENCODE_CFG" ] && ! cmp -s "$CFG_FILE" "$OPENCODE_CFG"; then
+  cp "$OPENCODE_CFG" "$OPENCODE_CFG.bak.$(date +%s)"
+  say "backed up existing $OPENCODE_CFG -> *.bak.$(date +%s)"
+fi
+cp "$CFG_FILE" "$OPENCODE_CFG"
+say "wrote opencode config -> $OPENCODE_CFG"
+
+# Drop the rate-limit proxy script. Throttled-by-default is the v0.2 behavior —
+# free NIM users will otherwise hit 429 mid-agent-loop.
+PROXY_FILE="$CONFIG_DIR/nim_proxy.py"
+if [ -n "$SRC_DIR" ] && [ -f "$SRC_DIR/tools/nim_proxy.py" ]; then
+  cp "$SRC_DIR/tools/nim_proxy.py" "$PROXY_FILE"
+  say "installed proxy -> $PROXY_FILE (from local clone)"
+elif [ -n "${EMBEDDED_NIM_PROXY:-}" ] && [ -f "$EMBEDDED_NIM_PROXY" ]; then
+  cp "$EMBEDDED_NIM_PROXY" "$PROXY_FILE"
+  say "installed proxy -> $PROXY_FILE (embedded)"
+else
+  say "fetching nim_proxy.py from $UPSTREAM_RAW"
+  if ! curl -fsSL --max-time 15 "$UPSTREAM_RAW/tools/nim_proxy.py" -o "$PROXY_FILE"; then
+    die "could not download nim_proxy.py from upstream. Check network."
+  fi
+  say "installed proxy -> $PROXY_FILE (from upstream)"
+fi
+chmod 644 "$PROXY_FILE"
 
 # ---------- 4. resolve API key ----------
 # Priority:
@@ -217,17 +254,29 @@ EOF
 chmod 600 "$ENV_FILE"
 say "wrote env reference -> $ENV_FILE (chmod 600)"
 
-# ---------- 7. launcher ----------
+# ---------- 7. launcher (throttled-by-default) ----------
+# Opencode reads ~/.config/opencode/opencode.json directly (OPENCODE_CONFIG env
+# var is ignored as of v1.15). Our installed config there has baseURL pointed
+# at http://127.0.0.1:8123/v1 — the local rate-limit proxy. The launcher only
+# needs to make sure the proxy is alive before opencode starts.
 cat > "$LAUNCHER" <<'LAUNCH'
 #!/usr/bin/env bash
-# nimcode — launch opencode CLI with the NIM-preconfigured provider.
+# nimcode — launch opencode pointed at the local NIM rate-limit proxy so
+# free-tier users (40 RPM cap) never hit 429 mid-agent-loop.
+#
+# Multi-key round-robin (combines under per-key 40 RPM cap):
+#   NIM_KEYS="nvapi-A...,nvapi-B..." nimcode
+#
+# Strict pacing override (default 5s between calls per key; 0 disables):
+#   NIM_MIN_INTERVAL=10 nimcode
 set -euo pipefail
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nim-code"
 ENV_FILE="$CONFIG_DIR/env"
-CFG_FILE="$CONFIG_DIR/opencode.json"
+PROXY_FILE="$CONFIG_DIR/nim_proxy.py"
+PROXY_PORT="${NIM_PROXY_PORT:-8123}"
 
-[ -f "$ENV_FILE" ] || { echo "nim-code: missing $ENV_FILE — run install.sh" >&2; exit 1; }
-[ -f "$CFG_FILE" ] || { echo "nim-code: missing $CFG_FILE — run install.sh" >&2; exit 1; }
+[ -f "$ENV_FILE" ]   || { echo "nim-code: missing $ENV_FILE — run install.sh" >&2; exit 1; }
+[ -f "$PROXY_FILE" ] || { echo "nim-code: missing $PROXY_FILE — run install.sh" >&2; exit 1; }
 
 set +eu
 # shellcheck disable=SC1090
@@ -235,15 +284,36 @@ set +eu
 set -eu
 
 command -v opencode >/dev/null 2>&1 || { echo "nim-code: opencode CLI not on PATH — run install.sh" >&2; exit 1; }
+command -v python3  >/dev/null 2>&1 || { echo "nim-code: python3 not on PATH (needed for rate-limit proxy)" >&2; exit 1; }
 
-if [ -z "${NVIDIA_API_KEY:-}" ]; then
-  echo "nim-code: NVIDIA_API_KEY not resolved from $ENV_FILE" >&2
-  echo "          fix: put your key in \$HOME/.nvidia_api_key" >&2
+if [ -z "${NVIDIA_API_KEY:-}" ] && [ -z "${NIM_KEYS:-}" ]; then
+  echo "nim-code: no key resolved. Set NVIDIA_API_KEY or NIM_KEYS, or put a key in \$HOME/.nvidia_api_key" >&2
   exit 1
 fi
 
-export OPENCODE_CONFIG="$CFG_FILE"
-exec opencode "$@"
+PROXY_PID=""
+# Start proxy if not already running on this port
+if ! curl -fsS --max-time 1 "http://127.0.0.1:$PROXY_PORT/" >/dev/null 2>&1; then
+  python3 "$PROXY_FILE" >"$CONFIG_DIR/nim_proxy.log" 2>&1 &
+  PROXY_PID=$!
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if curl -fsS --max-time 1 "http://127.0.0.1:$PROXY_PORT/" >/dev/null 2>&1; then break; fi
+    sleep 0.2
+  done
+  if ! curl -fsS --max-time 1 "http://127.0.0.1:$PROXY_PORT/" >/dev/null 2>&1; then
+    echo "nim-code: proxy failed to start (see $CONFIG_DIR/nim_proxy.log)" >&2
+    kill $PROXY_PID 2>/dev/null || true
+    exit 1
+  fi
+fi
+# Only kill the proxy on exit if we were the ones who started it
+trap '[ -n "$PROXY_PID" ] && kill $PROXY_PID 2>/dev/null || true' EXIT INT TERM
+
+# Run opencode (it reads ~/.config/opencode/opencode.json which already points
+# at the proxy). NOT exec — let the trap fire on opencode's exit.
+opencode "$@"
+rc=$?
+exit "$rc"
 LAUNCH
 chmod +x "$LAUNCHER"
 say "installed launcher -> $LAUNCHER"

@@ -7,7 +7,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "NVIDIA NIM",
       "options": {
-        "baseURL": "https://integrate.api.nvidia.com/v1",
+        "baseURL": "http://127.0.0.1:8123/v1",
         "apiKey": "{env:NVIDIA_API_KEY}"
       },
       "models": {
