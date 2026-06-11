@@ -430,10 +430,48 @@ fi
 # Only kill the proxy on exit if we were the ones who started it
 trap '[ -n "$PROXY_PID" ] && kill $PROXY_PID 2>/dev/null || true' EXIT INT TERM
 
+# Detect TUI mode: TUI runs when the first arg is empty, a flag, a project
+# path, or a TUI-only flag — NOT when invoking a subcommand like `run`, `serve`,
+# `models`, etc. Only TUI mode prints opencode's exit splash, so only TUI mode
+# needs rebranding.
+is_tui=1
+case "${1:-}" in
+  run|serve|web|attach|models|providers|auth|agent|upgrade|uninstall|export|import|github|pr|session|plugin|plug|db|mcp|acp|debug|stats|completion)
+    is_tui=0 ;;
+esac
+
 # Run opencode (it reads ~/.config/opencode/opencode.json which already points
 # at the proxy). NOT exec — let the trap fire on opencode's exit.
 opencode "$@"
 rc=$?
+
+# Rebrand opencode's exit splash. opencode prints ~8 lines (its ASCII banner +
+# "Continue opencode -s ses_...") on TUI exit. We can't change the binary, so
+# we erase those lines via cursor-up + clear-to-end and reprint a nimcode
+# version. Skipped on non-TUI subcommands and on non-zero exit (preserve errors).
+if [ "$is_tui" = "1" ] && [ "$rc" = "0" ] && [ -t 1 ]; then
+  ses_id=$(python3 - "$OPENCODE_DB" "$PWD" <<'PY' 2>/dev/null
+import sqlite3, sys
+try:
+    c = sqlite3.connect(sys.argv[1])
+    cur = c.cursor()
+    cur.execute("SELECT id FROM session WHERE directory = ? ORDER BY time_updated DESC LIMIT 1", (sys.argv[2],))
+    r = cur.fetchone()
+    c.close()
+    print(r[0] if r else "")
+except Exception:
+    print("")
+PY
+)
+  # Move up 9 lines and clear to end of screen
+  printf '\033[9A\033[J'
+  nimcode_banner
+  if [ -n "$ses_id" ]; then
+    printf '  \033[2mSession\033[0m   Repo understanding assistance\n'
+    printf '  \033[2mContinue\033[0m  \033[36mnimcode -s %s\033[0m\n\n' "$ses_id"
+  fi
+fi
+
 exit "$rc"
 LAUNCH
 chmod +x "$LAUNCHER"
