@@ -295,15 +295,11 @@ back to:
 
 Re-running `./install.sh` will overwrite this with the throttled default, so document the change for yourself or maintain a paid-config fork. ~250 lines.
 
-## Need help deploying this?
+## Want to collaborate?
 
-Setting up nimcode for a team, integrating with internal LLM gateways, custom skill libraries, or just want someone to install and configure it for your stack?
+If you're setting nimcode up for a team, integrating it with an internal LLM gateway, building custom skill libraries, or just want a hand getting it running on your stack — I'm keen to help.
 
-- **Setup** ($500 one-time): install, configure for your environment, train two engineers.
-- **Retainer** ($1–2k/month): priority Slack/email support, 24h response, monthly review.
-- **Custom integration** (quoted): connect nimcode to your internal infra, write team-specific skills, lock down key management.
-
-Email **rickesh.t.n@gmail.com** with what you're trying to do.
+Drop me a line at **rickesh.t.n@gmail.com** with what you're working on.
 
 ## Troubleshooting
 
