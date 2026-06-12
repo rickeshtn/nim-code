@@ -129,6 +129,42 @@ Configured in `opencode.json`. Switch in-session with `/models`.
 
 Methodology + per-task results: [`docs/benchmarks.md`](docs/benchmarks.md).
 
+## Skills and slash commands
+
+nimcode ships with built-in skills and slash commands that work in every session. Type `/` in the TUI to see what's available.
+
+| Built-in | Type | What it does |
+|----------|------|---|
+| `/load-graph` | command | Rehydrate context from `.agent-memory/graph/latest.md` at the start of a session |
+| `compact-graph` | skill | Compress the current session into a knowledge graph — pair with `/load-graph` next session |
+
+Write your own:
+
+```bash
+# Slash command — type /explain <file> in the TUI
+cat > ~/.config/opencode/commands/explain.md <<'EOF'
+Explain what $ARGUMENTS does — data flow, edge cases, anything that looks wrong.
+EOF
+
+# Skill — the model invokes it when the description matches
+mkdir -p ~/.config/opencode/skill/security-review
+cat > ~/.config/opencode/skill/security-review/SKILL.md <<'EOF'
+---
+name: security-review
+description: Audit code for OWASP Top 10. Use when the user asks for a security review.
+allowed-tools: Read, Grep, Bash
+---
+# Security Review
+1. Trace user inputs to sinks (SQL, shell, templates)
+2. Flag any unsanitized path
+3. Output: numbered findings with severity, file:line, fix suggestion
+EOF
+```
+
+Already use Claude Code? Run `nimcode sync-claude` to import your `~/.claude/skills` and `~/.claude/commands` into nimcode.
+
+Full guide: [`docs/skills-and-commands.md`](docs/skills-and-commands.md) — covers per-project skills, loading order, troubleshooting, and example libraries.
+
 ## Session management
 
 ```bash

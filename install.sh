@@ -140,6 +140,26 @@ else
 fi
 chmod 644 "$PROXY_FILE"
 
+# Drop the Claude sync helper. Lets users import ~/.claude/skills and
+# ~/.claude/commands into opencode so nimcode can use them as native skills
+# and slash commands.
+SYNC_FILE="$CONFIG_DIR/sync_claude.py"
+if [ -n "$SRC_DIR" ] && [ -f "$SRC_DIR/tools/sync_claude.py" ]; then
+  cp "$SRC_DIR/tools/sync_claude.py" "$SYNC_FILE"
+  say "installed claude sync -> $SYNC_FILE (from local clone)"
+elif [ -n "${EMBEDDED_SYNC_CLAUDE:-}" ] && [ -f "$EMBEDDED_SYNC_CLAUDE" ]; then
+  cp "$EMBEDDED_SYNC_CLAUDE" "$SYNC_FILE"
+  say "installed claude sync -> $SYNC_FILE (embedded)"
+else
+  if curl -fsSL --max-time 15 "$UPSTREAM_RAW/tools/sync_claude.py" -o "$SYNC_FILE" 2>/dev/null; then
+    say "installed claude sync -> $SYNC_FILE (from upstream)"
+  else
+    warn "could not download sync_claude.py — nimcode sync-claude will not work"
+    rm -f "$SYNC_FILE"
+  fi
+fi
+[ -f "$SYNC_FILE" ] && chmod 644 "$SYNC_FILE"
+
 # ---------- 4. resolve API key ----------
 # Priority:
 #   --reset:           ignore stored env file, re-detect from sources below
@@ -364,6 +384,13 @@ print(f'renamed: \"{old_title}\" -> \"{sys.argv[3]}\"')
     opencode session list
     exit $?
     ;;
+  sync-claude)
+    nimcode_banner
+    SYNC_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/nim-code/sync_claude.py"
+    [ -f "$SYNC_FILE" ] || { echo "nim-code: $SYNC_FILE not found — re-run install.sh" >&2; exit 1; }
+    python3 "$SYNC_FILE"
+    exit $?
+    ;;
   -h|--help|help)
     nimcode_banner
     cat <<'EOF'
@@ -376,6 +403,7 @@ Usage:
   nimcode --fork -s <sessionID>           fork and resume a session
   nimcode rename <sessionID> <new-title>  rename a session
   nimcode sessions                        list all sessions
+  nimcode sync-claude                     import ~/.claude/skills + commands
   nimcode run "prompt"                    run a one-shot prompt
   nimcode -m provider/model               use a specific model
 
@@ -476,6 +504,31 @@ exit "$rc"
 LAUNCH
 chmod +x "$LAUNCHER"
 say "installed launcher -> $LAUNCHER"
+
+# ---------- 7b. install bundled nimcode skills + commands ----------
+# nim-code ships its own skill ecosystem so the product is self-contained.
+# These are deployed to opencode's global config dirs and available in every
+# session via slash commands.
+OPENCODE_SKILL_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skill"
+OPENCODE_CMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/commands"
+mkdir -p "$OPENCODE_SKILL_DIR" "$OPENCODE_CMD_DIR"
+
+if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR/skills" ]; then
+  for s in "$SRC_DIR/skills"/*/; do
+    [ -d "$s" ] || continue
+    name=$(basename "$s")
+    mkdir -p "$OPENCODE_SKILL_DIR/$name"
+    cp -r "$s"/* "$OPENCODE_SKILL_DIR/$name/" 2>/dev/null || true
+  done
+  say "installed bundled skills -> $OPENCODE_SKILL_DIR/"
+fi
+if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR/commands" ]; then
+  for c in "$SRC_DIR/commands"/*.md; do
+    [ -f "$c" ] || continue
+    cp "$c" "$OPENCODE_CMD_DIR/"
+  done
+  say "installed bundled commands -> $OPENCODE_CMD_DIR/"
+fi
 
 # ---------- 8. PATH check ----------
 case ":$PATH:" in
