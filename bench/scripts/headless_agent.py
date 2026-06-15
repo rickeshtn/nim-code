@@ -25,7 +25,7 @@ import time
 import urllib.request
 import urllib.error
 
-NIM_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+NIM_URL = os.environ.get("NIM_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
 
 TOOLS = [
     {"type": "function", "function": {
@@ -143,7 +143,7 @@ def call_nim(api_key, model, messages, retries=3):
     last_err = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=int(os.environ.get("NIM_TIMEOUT", "120"))) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             last_err = f"HTTP {e.code}: {e.read()[:200]!r}"
