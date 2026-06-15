@@ -295,6 +295,105 @@ back to:
 
 Re-running `./install.sh` will overwrite this with the throttled default, so document the change for yourself or maintain a paid-config fork. ~250 lines.
 
+## Self-hosting (skip NIM entirely)
+
+NIM's free tier has problems beyond rate limits — in-demand models (Kimi K2.6, Gemma 4 31B, Llama 3.3 70B) frequently exhibit **TTFB-then-hang**: the upstream load balancer accepts the connection in ~140 ms, then returns no body for 15–60 s with no `Retry-After`, no 503, no signal. Quotas are per-model and per-day; daily caps on the larger models can be exhausted by a single agent-heavy session. Self-hosting removes all of this.
+
+### Option A — local llama.cpp + Gemma 4 31B (no quota, no queueing)
+
+Verified on a dual-GPU desktop (RTX 3080 20 GB + Tesla P100 16 GB, tensor-split 17,12). **Bench: 6/6 PASS**, agent wall-time ~21 min vs ~3 min on a warm NIM. ~287 tok/s prompt eval, ~12 tok/s decode.
+
+```bash
+# 1. Build llama.cpp with CUDA (Blackwell/Hopper/Ada/Ampere supported)
+git clone https://github.com/ggerganov/llama.cpp ~/llama.cpp
+cd ~/llama.cpp
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+
+# 2. Download Gemma 4 31B Q5_K_M (~22 GB)
+mkdir -p ~/models/gemma4
+hf download bartowski/google_gemma-4-31B-it-GGUF \
+  --include google_gemma-4-31B-it-Q5_K_M.gguf \
+  --local-dir ~/models/gemma4
+
+# 3. Start llama-server (single-GPU users: drop --tensor-split)
+~/llama.cpp/build/bin/llama-server \
+  -m ~/models/gemma4/google_gemma-4-31B-it-Q5_K_M.gguf \
+  -ngl 99 --tensor-split 17,12 -fa on --jinja \
+  -c 32768 --cache-reuse 256 \
+  --host 0.0.0.0 --port 8085 &
+
+# 4. Add a local provider to ~/.config/opencode/opencode.json
+# (insert under "provider": { ... } alongside the "nim" entry)
+```
+
+```json
+"gemma": {
+  "npm": "@ai-sdk/openai-compatible",
+  "name": "Gemma 4 (local llama-server)",
+  "options": {
+    "baseURL": "http://127.0.0.1:8085/v1",
+    "apiKey": "none"
+  },
+  "models": {
+    "google_gemma-4-31B-it-Q5_K_M.gguf": {
+      "name": "Gemma 4 31B Q5_K_M (local) — llama-server on :8085",
+      "tool_call": true,
+      "limit": { "context": 32768, "output": 4096 }
+    }
+  }
+}
+```
+
+```bash
+# 5. Run against local Gemma — no NIM key required
+nimcode -m gemma/google_gemma-4-31B-it-Q5_K_M.gguf
+```
+
+Tested gotchas:
+
+- **Port conflicts.** Pick a free port for `--port`. ClearML's `clearml-fileserver` container holds 8081; many ML stacks squat 8080. `ss -tln | grep :PORT` before launching.
+- **Context window vs system prompt.** opencode's agent system prompt is ~15 K tokens. `-c 24576` (llama.cpp default) leaves only ~9 K for the actual session — `04_btree` style tasks overflow. Use **`-c 32768`** minimum; `-c 49152` if VRAM allows.
+- **Bench harness timeout.** `bench/scripts/headless_agent.py` defaults `urlopen(timeout=120)`. At Gemma's ~12 tok/s local decode, a 4 K-token reply needs ~340 s. Set `NIM_TIMEOUT=600` (env var) when benching local models — supported in v0.3.3+.
+- **Tool calls.** Gemma 4 31B emits proper OpenAI `tool_calls[]` via llama.cpp's `--jinja` template loader. Drop `--jinja` and you'll get the function call in `content` as a sentinel-wrapped string and the harness will fail silently.
+
+### Option B — NVIDIA NIM container (paid NGC access)
+
+Same OpenAI-compatible API, no quota, but requires an NGC subscription.
+
+```bash
+docker run --gpus all --shm-size=16GB -p 8000:8000 \
+  -e NGC_API_KEY="$NGC_API_KEY" \
+  nvcr.io/nim/meta/llama-3.3-70b-instruct:latest
+```
+
+Then edit `opencode.json`:
+
+```json
+"baseURL": "http://127.0.0.1:8000/v1"
+```
+
+### GPU sizing matrix (agentic-coding workloads)
+
+What fits with ~4–8 GB held back for KV cache at 32 K context. Pick by VRAM, not by GPU model name — an A100-80 and an H100-80 fit the same things.
+
+| VRAM | Example GPUs | Best agent model (single-GPU) | Format | Notes |
+|---|---|---|---|---|
+| 16–24 GB | RTX 3080 / 3090 / 4090 / 5070 Ti | `qwen2.5-coder-14b` or `llama-3.1-8b` | FP16 | 7 B–14 B easy; 32 B only at Q4 with tight KV |
+| 36 GB | RTX 3080 + P100 (this README's setup) | **`gemma-4-31b-it`** | Q5_K_M | ~12 tok/s decode, 6/6 bench |
+| 48 GB | RTX A6000 / L40 / L40S / 2× 3090 | `qwen3-coder-32b-instruct` or `gemma-4-31b-it` | BF16 / FP16 | sweet spot for code agents |
+| 80 GB | A100-80 / H100 / H200 / B100 / B200 | **`llama-3.3-70b-instruct`** (FP8) or `gemma-4-31b-it` (BF16) | FP8 / BF16 | strongest single-GPU agent tier |
+| 2× 80 GB | 2× H100 / H200 / B100 | `mistral-large-2` / `nemotron-3-super-120b-a12b` | FP8 | 120 B MoE class fits with room |
+| 4× 80 GB | 4× H100 / H200 / B200 | `llama-3.1-405b` (FP8) | FP8 | dense 405 B fits 320 GB |
+| 8× 80 GB | 8× H100 / H200 / GB200 | `kimi-k2.6` (1T MoE) / `nemotron-3-ultra-550b` | FP8 | the upstream NIM tier |
+
+Rules of thumb:
+
+- **Decode speed scales with active params, not total.** A 120 B MoE with 12 B active ≈ a dense 12 B for decode. Same wall-time, higher quality.
+- **FP8 vs BF16 is roughly 2× density at ~99% quality** on Hopper/Blackwell. Use FP8 if your GPU supports it.
+- **Q4/Q5_K_M GGUFs** are great for getting a model to fit a smaller card. Expect ~10–20 % quality drop vs FP16 on code agent tasks. For Q5_K_M specifically the loss is usually invisible.
+- **MoE models (Mixtral, Qwen3, Nemotron-3-super, Kimi)** save decode tokens but still need full VRAM for all expert weights — don't size by active params alone.
+
 ## Want to collaborate?
 
 If you're setting nimcode up for a team, integrating it with an internal LLM gateway, building custom skill libraries, or just want a hand getting it running on your stack — I'm keen to help.
