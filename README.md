@@ -120,12 +120,13 @@ Configured in `opencode.json`. Switch in-session with `/models`.
 
 | Model | Role | Score on our bench |
 |---|---|---|
-| **`moonshotai/kimi-k2.6`** | **default** — 1T MoE, fastest tool calls | **6 / 6** |
-| `qwen/qwen3-coder-480b-a35b-instruct` | strongest coder; rate-limited on free tier | 2 / 3 completed |
-| `qwen/qwen3.5-122b-a10b` | general-purpose alt | not yet benched |
-| `nvidia/nemotron-3-super-120b-a12b` | Mamba-Transformer hybrid, 200k ctx | not yet benched |
-| `meta/llama-3.3-70b-instruct` | stable fallback | 3 / 6 |
-| `meta/llama-3.1-8b-instruct` | small/fast (opencode `small_model` slot) | n/a |
+| **`moonshotai/kimi-k2.6`** | **default (NIM)** — 1T MoE, fastest tool calls when warm | **6 / 6** (v0.1) · **5 / 6** (v0.2 rerun, see notes) |
+| `nvidia/nemotron-3-super-120b-a12b` | NIM, 120B MoE / 12B active, 200 K ctx | **≥ 5 / 6** (v0.2 — 99_refactor still in flight at publish) |
+| `meta/llama-3.3-70b-instruct` | NIM, dense 70B, stable when warm | 4 / 6 (v0.2, up from 3 / 6 in v0.1) |
+| `qwen/qwen3.5-122b-a10b` | NIM, general-purpose alt | not yet benched (cold-timeout in v0.2 probe) |
+| `meta/llama-3.1-8b-instruct` | NIM, small/fast (opencode `small_model` slot) | n/a |
+| `gemma-4-31b-it (local Q5_K_M)` | **self-host** — llama.cpp, no NIM, no quota | **6 / 6** (v0.2 — see Self-hosting section) |
+| ~~`qwen/qwen3-coder-480b-a35b-instruct`~~ | retired by NVIDIA (410 Gone) | removed in v0.3.3 |
 
 Methodology + per-task results: [`docs/benchmarks.md`](docs/benchmarks.md).
 
