@@ -359,6 +359,52 @@ Tested gotchas:
 - **Bench harness timeout.** `bench/scripts/headless_agent.py` defaults `urlopen(timeout=120)`. At Gemma's ~12 tok/s local decode, a 4 K-token reply needs ~340 s. Set `NIM_TIMEOUT=600` (env var) when benching local models — supported in v0.3.3+.
 - **Tool calls.** Gemma 4 31B emits proper OpenAI `tool_calls[]` via llama.cpp's `--jinja` template loader. Drop `--jinja` and you'll get the function call in `content` as a sentinel-wrapped string and the harness will fail silently.
 
+### Speeding up local inference
+
+The dual-GPU baseline above (Gemma-4-31B Q5_K_M, RTX 3080 + P100) decodes at **~12 tok/s**. That's why a bench task can take 5–10× longer than on warm NIM. Speedups, ranked by effort × payoff:
+
+| Change | Effort | Expected speedup | Trade-off |
+|---|---|---|---|
+| **Drop the Pascal GPU, run on Ampere/Ada single-GPU** | trivial — remove `--tensor-split`, set `-ngl 99`, lower quant | **2–3×** | Need a model that fits one card. P100 (sm_60) has no FP16 tensor cores or flash-attention v2 → tensor parallel waits on it. |
+| **Switch to a smaller code-tuned model** (`qwen2.5-coder-14b-instruct-q5_k_m`, `mistral-small-22b-instruct-q4_k_m`) | trivial — change `-m` | **3–4×** | Less generalist, but our bench shows 14B coders matching 31B on the standard tasks. |
+| **Drop quant tier Q5_K_M → Q4_K_M → IQ4_XS** | trivial — re-download | **20–40%** | Q4_K_M is usually invisible quality loss; IQ4_XS shows on long reasoning. |
+| **Speculative decoding** with a small draft model (`--draft -md gemma-2b-it.gguf`) | medium — add flags | **1.5–2.5×** | None functional. Needs same tokenizer family. |
+| **Switch llama.cpp → exllamav2** (EXL2 quants) on Ampere+ | medium — new server, EXL2 weights | **1.3–1.7×** vs llama.cpp at same quant | No CPU offload, no Pascal support. |
+| **Switch llama.cpp → vLLM with AWQ INT4** on Ampere+ | hard — different server | **3–5×** at high batch | No Pascal support; cold-start costs more VRAM. |
+| **Replace P100 with a 24 GB Ampere card (RTX 3090 / 4090 / A5000)** | hardware | **4–6×** end-to-end | $500–1500. |
+
+Concrete picks for the RTX 3080 + P100 baseline:
+
+```bash
+# Option 1: keep gemma-4-31b, harder quant, single 3080
+hf download bartowski/google_gemma-4-31B-it-GGUF \
+  --include google_gemma-4-31B-it-Q3_K_M.gguf \
+  --local-dir ~/models/gemma4
+# fits ~14 GB on the 3080 alone; expect ~25 tok/s
+~/llama.cpp/build/bin/llama-server \
+  -m ~/models/gemma4/google_gemma-4-31B-it-Q3_K_M.gguf \
+  -ngl 99 -fa on --jinja -c 32768 \
+  --host 0.0.0.0 --port 8085 -dev CUDA0
+
+# Option 2: smaller code model, same single-GPU strategy
+hf download bartowski/Qwen2.5-Coder-14B-Instruct-GGUF \
+  --include Qwen2.5-Coder-14B-Instruct-Q5_K_M.gguf \
+  --local-dir ~/models/qwen
+# fits ~10 GB on the 3080 alone; expect ~40 tok/s, similar code quality
+~/llama.cpp/build/bin/llama-server \
+  -m ~/models/qwen/Qwen2.5-Coder-14B-Instruct-Q5_K_M.gguf \
+  -ngl 99 -fa on --jinja -c 32768 \
+  --host 0.0.0.0 --port 8085 -dev CUDA0
+```
+
+Either drops bench wall-time from ~21 min to ~5–7 min.
+
+Knobs that don't help much:
+
+- **Bumping `-b` / `-ub` prompt-eval batch size.** Already saturated at default 2048 for 31B-class. Helps if your prompt-eval is the bottleneck — ours is decode-bound.
+- **`-ctk q4_0` (KV cache quant).** Saves ~30% KV VRAM but the speed delta is noise unless you're context-bound.
+- **Pinning to one socket / NUMA tuning.** Inference is GPU-bound, CPU is mostly memcpy and tokenization.
+
 ### Option B — NVIDIA NIM container (paid NGC access)
 
 Same OpenAI-compatible API, no quota, but requires an NGC subscription.
