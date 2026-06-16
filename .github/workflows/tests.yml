@@ -1,0 +1,78 @@
+name: tests
+
+# Runs the 6-task stress suite via ./test.sh against NIM-hosted models.
+# Separate workflow from ci.yml because:
+#   - it depends on NVIDIA_API_KEY (repo secret); ci.yml runs on every PR
+#     including fork PRs which can't access secrets.
+#   - it takes ~3-15 min wall, vs ci.yml's <1 min.
+#   - transient NIM cold-starts can blow MAX_FAIL=0 — see MAX_FAIL=1 default.
+#
+# To enable: add NVIDIA_API_KEY to the repo's Actions secrets
+# (Settings -> Secrets and variables -> Actions -> New repository secret).
+# Without the secret, the job skips cleanly via the `if:` guard.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "NIM model id to bench against"
+        required: false
+        default: "moonshotai/kimi-k2.6"
+      max_fail:
+        description: "Failures tolerated before the job fails"
+        required: false
+        default: "1"
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    # Skip on fork PRs (no access to NVIDIA_API_KEY secret).
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: pin opencode to the version this baseline was measured on
+        run: npm i -g opencode-ai@1.15.13
+
+      - name: bootstrap nim-code config from repo
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          if [ -z "$NVIDIA_API_KEY" ]; then
+            echo "::warning ::NVIDIA_API_KEY secret not set on this repo — bench job will skip"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          printf '%s\n' "$NVIDIA_API_KEY" > "$HOME/.nvidia_api_key"
+          chmod 600 "$HOME/.nvidia_api_key"
+          # Idempotent installer wires up ~/.config/nim-code/{env,opencode.json,nim_proxy.py}.
+          ./install.sh
+
+      - name: run integration tests
+        if: env.SKIP != '1'
+        env:
+          MODEL: ${{ github.event.inputs.model || 'moonshotai/kimi-k2.6' }}
+          MAX_FAIL: ${{ github.event.inputs.max_fail || '1' }}
+          MAX_TURNS: '15'
+        run: ./test.sh
+
+      - name: upload SUMMARY artifact
+        if: always() && env.SKIP != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-summary
+          path: /tmp/nim_suite_*/SUMMARY.md
+          if-no-files-found: ignore

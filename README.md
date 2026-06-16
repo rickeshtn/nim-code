@@ -134,6 +134,15 @@ Configured in `opencode.json`. Switch in-session with `/models`.
 
 Methodology + per-task results: [`docs/benchmarks.md`](docs/benchmarks.md).
 
+Run the suite yourself as a strict pass/fail test:
+
+```bash
+./test.sh                                              # kimi-k2.6, exit 1 on any failure
+MODEL=meta/llama-3.3-70b-instruct MAX_FAIL=1 ./test.sh  # different model, tolerate 1 fail
+```
+
+`./test.sh` exits 0 iff `FAIL + NO-SCORE ≤ MAX_FAIL`. It stamps the opencode version and the nim-code `git describe` into the SUMMARY so each result is attributable. CI runs this on every push to `main` and every PR via [`.github/workflows/tests.yml`](.github/workflows/tests.yml) (gated on the `NVIDIA_API_KEY` repo secret being configured).
+
 ## Skills and slash commands
 
 nimcode ships with built-in skills and slash commands that work in every session. Type `/` in the TUI to see what's available.
