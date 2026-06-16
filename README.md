@@ -127,6 +127,7 @@ Configured in `opencode.json`. Switch in-session with `/models`.
 | `nvidia/nemotron-3-super-120b-a12b` | NIM, 120B MoE / 12B active, 200 K ctx | 5 / 6 (v0.2 — FAIL 99_refactor at 15-turn cap) |
 | `meta/llama-3.3-70b-instruct` | NIM, dense 70B, stable when warm | 4 / 6 (v0.2, up from 3 / 6 in v0.1 — same two tasks fail) |
 | [`yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1`](https://huggingface.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF) (Q4_K_M, community) | self-host, HF fine-tune, 12B | **1 / 6** — fast (58 tok/s) but tool-call format incompatible (see notes) |
+| [`bartowski/Qwen2.5-Coder-14B-Instruct-GGUF`](https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF) (Q5_K_M, official Qwen weights) | self-host, 14B code-tuned | **0 / 6** — fast (50 tok/s) but llama.cpp tool-call parser falls back to `peg-native` (passthrough) for Qwen 2.5; model emits `<function-calls>{...}</function-calls>` in `content`, never structured `tool_calls[]`. Same weights work fine under vLLM / NIM. |
 | `qwen/qwen3.5-122b-a10b` | NIM, general-purpose alt | not benchable (cold-timeout in v0.2 probe) |
 | `meta/llama-3.1-8b-instruct` | NIM, small/fast (opencode `small_model` slot) | n/a |
 | ~~`qwen/qwen3-coder-480b-a35b-instruct`~~ | retired by NVIDIA (410 Gone) | removed in v0.3.3 |
@@ -387,7 +388,9 @@ What to do before committing to a community fine-tune for agent use:
 
 3. **`finish_reason: tool_calls`** vs `finish_reason: stop` is the other tell. Stop means the model spoke text; tool_calls means it stopped specifically to call a function. Want the latter.
 
-Verified-to-work base models for community fine-tuning where the chat template + tool-call shape both round-trip cleanly: vanilla Gemma 4 31B (proven by our 6/6 self-host result), Qwen 2.5 7B/14B Instruct, Ministral-8B-Instruct-2410, Mistral 7B v0.3. Stick to fine-tunes whose model card explicitly mentions OpenAI tool-call compatibility, or test before you trust.
+When tool calls come back as text in `content` — and they will, for most non-vanilla GGUFs on llama.cpp — point your client at the [`tool_call_normalizer.py`](../gemma4_wClaude/tool_call_normalizer.py) sidecar (in the sibling project dir). It detects the textual wrapper (markdown JSON fence, `<function-calls>`, `<tool_call>` with Python-call body, `<TOOLCALL>[…]`, bare JSON, etc.), parses it, and rewrites the response to OpenAI `tool_calls[]` shape on the way out. Model-keyed dispatch — see [`docs/tool_call_formats.md`](docs/tool_call_formats.md) for the full survey + per-model profiles.
+
+Worth repeating: this is a llama.cpp parser gap (the `peg-native` passthrough path), not a model bug. The same models served via vLLM emit OpenAI tool_calls natively. If you are running anything beyond vanilla Gemma 4 locally and don't want to maintain the normalizer's pattern catalog yourself, vLLM is the cleaner long-term answer.
 
 ### Speeding up local inference
 
