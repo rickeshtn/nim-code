@@ -122,9 +122,11 @@ Configured in `opencode.json`. Switch in-session with `/models`.
 |---|---|---|
 | **`mistralai/mistral-medium-3.5-128b`** | **NIM leader v0.2** — clean tool calls, 128B dense | **6 / 6** |
 | `gemma-4-31b-it (local Q5_K_M)` | **self-host** — llama.cpp, no NIM, no quota | **6 / 6** (see Self-hosting section) |
+| `gemma-4-31b-it (local Q3_K_M, single 3080)` | self-host, harder quant | 5 / 6 (3.3× faster than Q5 dual; FAIL 99_refactor only) |
 | `moonshotai/kimi-k2.6` | NIM default in `opencode.json`, 1T MoE | **6 / 6** (v0.1) · **5 / 6** (v0.2 — NIM-side sentinel-leak regression) |
 | `nvidia/nemotron-3-super-120b-a12b` | NIM, 120B MoE / 12B active, 200 K ctx | 5 / 6 (v0.2 — FAIL 99_refactor at 15-turn cap) |
 | `meta/llama-3.3-70b-instruct` | NIM, dense 70B, stable when warm | 4 / 6 (v0.2, up from 3 / 6 in v0.1 — same two tasks fail) |
+| [`yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1`](https://huggingface.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF) (Q4_K_M, community) | self-host, HF fine-tune, 12B | **1 / 6** — fast (58 tok/s) but tool-call format incompatible (see notes) |
 | `qwen/qwen3.5-122b-a10b` | NIM, general-purpose alt | not benchable (cold-timeout in v0.2 probe) |
 | `meta/llama-3.1-8b-instruct` | NIM, small/fast (opencode `small_model` slot) | n/a |
 | ~~`qwen/qwen3-coder-480b-a35b-instruct`~~ | retired by NVIDIA (410 Gone) | removed in v0.3.3 |
@@ -359,6 +361,34 @@ Tested gotchas:
 - **Bench harness timeout.** `bench/scripts/headless_agent.py` defaults `urlopen(timeout=120)`. At Gemma's ~12 tok/s local decode, a 4 K-token reply needs ~340 s. Set `NIM_TIMEOUT=600` (env var) when benching local models — supported in v0.3.3+.
 - **Tool calls.** Gemma 4 31B emits proper OpenAI `tool_calls[]` via llama.cpp's `--jinja` template loader. Drop `--jinja` and you'll get the function call in `content` as a sentinel-wrapped string and the harness will fail silently.
 
+### Trying community fine-tunes from HuggingFace
+
+You can point llama.cpp at any GGUF from HuggingFace — `hf download <repo> --include "*.gguf" --local-dir ...` then `llama-server -m <path>` is the whole recipe. The trap is **tool-call format compatibility**: even when the base architecture supports OpenAI `tool_calls[]` (verified for the base model), the fine-tune may have trained on a different convention and silently fall back to it.
+
+Real example from our v0.2 bench: [`yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF`](https://huggingface.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF) (Q4_K_M, 6.9 GB) is **fast** — ~58 tok/s decode on the single-3080 baseline, 2.3× the 31B Q3 rate — but it emits `<tool_call>fn_name(arg=value)</tool_call>` as raw text in the message `content` instead of OpenAI structured `tool_calls[]`. Got 1/6 on the bench because the harness can't parse that format. The base Gemma 4 31B works fine on the same harness with the same `--jinja` flag, so this is a training-artifact mismatch in the fine-tune, not a llama.cpp config issue.
+
+What to do before committing to a community fine-tune for agent use:
+
+1. **Probe its tool-call shape with a one-liner before benching**:
+
+    ```bash
+    curl -sS -X POST http://127.0.0.1:8085/v1/chat/completions \
+      -H "Content-Type: application/json" -d '{
+        "model":"<the gguf id>",
+        "messages":[
+          {"role":"system","content":"You have one tool: write_file. Use it."},
+          {"role":"user","content":"Write hello to test.txt"}
+        ],
+        "tools":[{"type":"function","function":{"name":"write_file","description":"write","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}}],
+        "tool_choice":"auto","max_tokens":120}' | python3 -m json.tool
+    ```
+
+2. **Look for `tool_calls` in the response.** If the function call appears in `content` as text — even pretty text like `<tool_call>...</tool_call>` — the model **will fail the bench** and won't work cleanly in opencode. Move on.
+
+3. **`finish_reason: tool_calls`** vs `finish_reason: stop` is the other tell. Stop means the model spoke text; tool_calls means it stopped specifically to call a function. Want the latter.
+
+Verified-to-work base models for community fine-tuning where the chat template + tool-call shape both round-trip cleanly: vanilla Gemma 4 31B (proven by our 6/6 self-host result), Qwen 2.5 7B/14B Instruct, Ministral-8B-Instruct-2410, Mistral 7B v0.3. Stick to fine-tunes whose model card explicitly mentions OpenAI tool-call compatibility, or test before you trust.
+
 ### Speeding up local inference
 
 The dual-GPU baseline above (Gemma-4-31B Q5_K_M, RTX 3080 + P100) decodes at **~12 tok/s**. That's why a bench task can take 5–10× longer than on warm NIM. Speedups, ranked by effort × payoff:
@@ -441,6 +471,64 @@ Rules of thumb:
 - **FP8 vs BF16 is roughly 2× density at ~99% quality** on Hopper/Blackwell. Use FP8 if your GPU supports it.
 - **Q4/Q5_K_M GGUFs** are great for getting a model to fit a smaller card. Expect ~10–20 % quality drop vs FP16 on code agent tasks. For Q5_K_M specifically the loss is usually invisible.
 - **MoE models (Mixtral, Qwen3, Nemotron-3-super, Kimi)** save decode tokens but still need full VRAM for all expert weights — don't size by active params alone.
+
+### Reference architecture: 5-dev team on 4× RTX PRO 6000 Blackwell
+
+Worked example for a small office. Replaces NIM dependency entirely.
+
+**Critical: workstation RTX PRO 6000 Blackwell has no NVLink.** Inter-GPU traffic crosses PCIe Gen5 (~64 GB/s — about 30× slower than B-series NVLink). Don't tensor-parallel across cards. Run one model per card as independent replicas behind a router.
+
+| GPU | Model | Format | VRAM | Role |
+|---|---|---|---|---|
+| Card 0 | `meta/llama-3.3-70b-instruct` | FP8 W8A8 (vLLM) | ~70 GB | opencode default — replica A |
+| Card 1 | `meta/llama-3.3-70b-instruct` | FP8 W8A8 (vLLM) | ~70 GB | opencode default — replica B (load-balanced with A) |
+| Card 2 | `qwen/qwen3-coder-32b-instruct` | BF16 (vLLM) | ~64 GB | dedicated to code-heavy tasks (large refactors, big diffs) |
+| Card 3 | `gemma-4-31b-it` or `mistral-small-22b` | BF16 (vLLM) | ~60 GB | opencode `small_model` slot — summaries, tool routing, naming |
+
+Per-replica throughput on RTX PRO 6000 Blackwell + vLLM (estimates from public benchmarks; verify with your own pilot):
+
+| Model | Decode @ batch=1 | Aggregate @ batch=8 (continuous batching) |
+|---|---|---|
+| Llama-3.3-70B FP8 | ~70–90 tok/s | ~400–600 tok/s |
+| Qwen3-Coder-32B BF16 | ~80–110 tok/s | ~600–900 tok/s |
+| Gemma-4-31B BF16 | ~120–160 tok/s | ~700–1000 tok/s |
+
+For 5 devs with bursty agent traffic, 2 Llama-70B replicas alone give ~1000 tok/s aggregate — roughly 20× headroom. The code and fast cards are bonus capacity, not load-bearing.
+
+**Routing**: put LiteLLM in front of the four vLLM endpoints; opencode talks to one base URL. Two `llama-70b` entries with the same `model_name` make LiteLLM round-robin between Cards 0 and 1.
+
+```yaml
+# litellm_config.yaml
+model_list:
+  - model_name: llama-70b
+    litellm_params: { model: openai/meta-llama-3.3-70b-instruct, api_base: http://card0:8001/v1 }
+  - model_name: llama-70b
+    litellm_params: { model: openai/meta-llama-3.3-70b-instruct, api_base: http://card1:8001/v1 }
+  - model_name: qwen-coder-32b
+    litellm_params: { model: openai/qwen3-coder-32b-instruct, api_base: http://card2:8001/v1 }
+  - model_name: gemma-31b-fast
+    litellm_params: { model: openai/gemma-4-31b-it, api_base: http://card3:8001/v1 }
+```
+
+**Supporting infrastructure** (easy to underspec around the GPUs):
+
+| Item | Requirement |
+|---|---|
+| CPU + board | 4× PCIe Gen5 x16 = 64 lanes from CPU (Threadripper Pro 7975WX or EPYC 7373X class) |
+| RAM | 256 GB DDR5 ECC |
+| PSU | 4× 600 W cards → 3000 W titanium, or 2× 1600 W |
+| Chassis | 4U workstation/server (e.g. ASUS ESC8000A-E12, Supermicro AS-4125GS-TNRT) |
+| Storage | 4 TB NVMe Gen4 + bulk HDD for model cache |
+| Power circuit | 240 V dedicated, ~3.5 kW sustained under load |
+| Cooling | Server closet or dedicated AC — 4 of these heats a closed office noticeably |
+
+**Pilot first.** RTX PRO 6000 Blackwell launched in 2025; vLLM and TensorRT-LLM Blackwell-specific kernel paths (FP8 / NVFP8 / FP4) are mature as of mid-2026 but still seeing edge-case fixes. Buy one card, validate your real workload runs cleanly under vLLM with FP8 weights, then commit to the remaining three.
+
+**When this config stops being right**:
+
+- **10–15 devs**: same cards, add a 5th (or run 2 replicas per card with smaller models). Replicas scale linearly.
+- **20+ devs / batch CI workloads**: jump tier to B100 PCIe. HBM3e at 8 TB/s (vs RTX PRO's 1.8 TB/s GDDR7) starts to matter under sustained high-concurrency throughput.
+- **Need 200 K+ context routinely**: still possible on 96 GB per card, but KV budget tightens — drop Qwen3-Coder-32B to AWQ INT4 to claw back KV space.
 
 ## Want to collaborate?
 
