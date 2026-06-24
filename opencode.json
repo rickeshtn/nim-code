@@ -42,6 +42,46 @@
           "limit": { "context": 128000, "output": 8192 }
         }
       }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local GGUF)",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1",
+        "apiKey": "ollama"
+      },
+      "models": {
+        "hf.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF:Q4_K_M": {
+          "name": "Gemma-4 12B coder fable5 v1 (Q4_K_M, local)",
+          "tool_call": true,
+          "limit": { "context": 8192, "output": 4096 }
+        },
+        "hf.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF:Q8_0": {
+          "name": "Gemma-4 12B coder fable5 v1 (Q8_0, local)",
+          "tool_call": true,
+          "limit": { "context": 8192, "output": 4096 }
+        },
+        "hf.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF:Q4_K_M": {
+          "name": "Gemma-4 12B agentic fable5 v2 tau2 (Q4_K_M, local)",
+          "tool_call": true,
+          "limit": { "context": 8192, "output": 4096 }
+        },
+        "hf.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF:Q8_0": {
+          "name": "Gemma-4 12B agentic fable5 v2 tau2 (Q8_0, local)",
+          "tool_call": true,
+          "limit": { "context": 8192, "output": 4096 }
+        },
+        "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q4_K_M": {
+          "name": "Qwythos 9B Claude-Mythos-5 1M (Q4_K_M, local)",
+          "tool_call": true,
+          "limit": { "context": 32768, "output": 4096 }
+        },
+        "hf.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF:Q8_0": {
+          "name": "Qwythos 9B Claude-Mythos-5 1M (Q8_0, local)",
+          "tool_call": true,
+          "limit": { "context": 32768, "output": 4096 }
+        }
+      }
     }
   }
 }

@@ -25,7 +25,14 @@ import time
 import urllib.request
 import urllib.error
 
+try:
+    from tool_call_normalizer import normalize_response as _normalize_tool_calls
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from tool_call_normalizer import normalize_response as _normalize_tool_calls
+
 NIM_URL = os.environ.get("NIM_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+_LOCAL_ENDPOINT = any(h in NIM_URL for h in ("127.0.0.1", "localhost", "0.0.0.0"))
 
 TOOLS = [
     {"type": "function", "function": {
@@ -124,27 +131,79 @@ def tool_run_bash(workdir, cmd, timeout_s=60):
         return {"error": f"timeout after {timeout_s}s"}
 
 
-def call_nim(api_key, model, messages, retries=3):
-    body = json.dumps({
-        "model": model,
-        "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "max_tokens": 4096,
-        "temperature": 0.2,
-    }).encode()
-    req = urllib.request.Request(
-        NIM_URL, data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+def _local_messages_with_embedded_tools(messages):
+    """Local Ollama rejects requests with `tools` for models whose Modelfile
+    doesn't declare tool support — which is the case for every community
+    fine-tune pulled directly from `hf.co/...`. Workaround: splice the tool
+    schemas into the system message and rely on the normalizer to parse the
+    wrapped tool calls (`<tool_call>fn(...)</tool_call>`, JSON, etc.) out
+    of message.content. Tool results (`role: tool`) are repackaged as user
+    messages because community fine-tunes rarely see the `tool` role.
+    """
+    fn_specs = [t["function"] for t in TOOLS]
+    tools_block = (
+        "\n\n# Available tools\n"
+        "Call EXACTLY ONE tool per response by emitting it in your message body. "
+        "Accepted forms (use any one; pick what matches your training):\n"
+        "  <tool_call>fn_name(arg1=val1, arg2=\"...\")</tool_call>\n"
+        "  <tool_call>{\"name\":\"fn_name\",\"arguments\":{...}}</tool_call>\n"
+        "  ```json\n  {\"name\":\"fn_name\",\"arguments\":{...}}\n  ```\n"
+        "After emitting one tool call, stop generating. Do not narrate.\n\n"
+        "Tools:\n" + json.dumps(fn_specs, indent=2)
     )
+    out = []
+    sys_done = False
+    for m in messages:
+        if m["role"] == "system" and not sys_done:
+            out.append({"role": "system", "content": (m.get("content") or "") + tools_block})
+            sys_done = True
+        elif m["role"] == "tool":
+            # Repackage tool-result as user content so models without the
+            # `tool` role still see the previous call's result.
+            out.append({
+                "role": "user",
+                "content": f"[tool_result id={m.get('tool_call_id','')}]\n{m.get('content','')}",
+            })
+        elif m["role"] == "assistant":
+            # Strip tool_calls field — keep the content (which may already
+            # be the wrapped form the model emitted) so the model sees its
+            # own history coherently.
+            out.append({"role": "assistant", "content": m.get("content") or ""})
+        else:
+            out.append(m)
+    if not sys_done:
+        out.insert(0, {"role": "system", "content": "You are a coding agent." + tools_block})
+    return out
+
+
+def call_nim(api_key, model, messages, retries=3):
+    if _LOCAL_ENDPOINT:
+        body = json.dumps({
+            "model": model,
+            "messages": _local_messages_with_embedded_tools(messages),
+            "max_tokens": 4096,
+            "temperature": 0.2,
+        }).encode()
+    else:
+        body = json.dumps({
+            "model": model,
+            "messages": messages,
+            "tools": TOOLS,
+            "tool_choice": "auto",
+            "max_tokens": 4096,
+            "temperature": 0.2,
+        }).encode()
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(NIM_URL, data=body, headers=headers)
     last_err = None
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=int(os.environ.get("NIM_TIMEOUT", "120"))) as resp:
-                return json.loads(resp.read())
+                raw = resp.read()
+                raw = _normalize_tool_calls(raw)
+                return json.loads(raw)
         except urllib.error.HTTPError as e:
             last_err = f"HTTP {e.code}: {e.read()[:200]!r}"
             if e.code in (429, 500, 502, 503, 504):
@@ -183,7 +242,17 @@ def run(workdir, prompt, model, api_key, max_turns):
             break
         for tc in tool_calls:
             stats["tool_calls"] += 1
-            fn = tc["function"]["name"]
+            fn_raw = tc["function"]["name"]
+            # Community fine-tunes routinely emit CamelCase or PascalCase
+            # variants of the tool names (WriteFile/RunBash/...). Canonicalize
+            # so a misspelled call still dispatches rather than burning a turn.
+            _TOOL_ALIASES = {
+                "writefile": "write_file", "write": "write_file",
+                "readfile":  "read_file",  "read":  "read_file", "cat": "read_file",
+                "runbash":   "run_bash",   "run":   "run_bash",  "bash": "run_bash", "shell": "run_bash", "exec": "run_bash",
+                "finish":    "finish",     "done":  "finish",
+            }
+            fn = _TOOL_ALIASES.get(fn_raw.lower().replace("-", "").replace("_", ""), fn_raw)
             try:
                 args = json.loads(tc["function"]["arguments"] or "{}")
             except json.JSONDecodeError as e:
@@ -245,8 +314,8 @@ def main():
     ap.add_argument("--max-turns", type=int, default=12)
     args = ap.parse_args()
 
-    api_key = os.environ.get("NVIDIA_API_KEY")
-    if not api_key:
+    api_key = os.environ.get("NVIDIA_API_KEY") or ""
+    if not api_key and not _LOCAL_ENDPOINT:
         sys.exit("NVIDIA_API_KEY not set")
 
     prompt = pathlib.Path(args.prompt_file).read_text()

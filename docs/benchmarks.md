@@ -15,6 +15,30 @@ A small but informative agentic-coding suite. Each task ships a failing pytest f
 
 `bench/scripts/headless_agent.py` is a ~270-line OpenAI-tool-call loop. It exposes four tools to the model: `write_file`, `read_file`, `run_bash`, `finish`. It is **not** opencode — it's a smaller harness that uses the same NIM endpoint, the same tool-call protocol, and a 15-turn cap. Results here approximate what opencode would observe.
 
+## v0.3 results — local Ollama, community Gemma-4 fable5 fine-tunes + Qwythos blocker (2026-06-24)
+
+First sweep hosted on **Ollama 0.20.2** against the local OpenAI-compatible endpoint at `http://127.0.0.1:11434/v1`. Three changes to the harness made this possible:
+
+1. **Embedded-tool path in `headless_agent.py`.** When `NIM_URL` is localhost, the harness stuffs the tool schemas into the system prompt and drops the OpenAI `tools` field — Ollama 0.20 rejects requests with `tools` for any model whose Modelfile doesn't declare tool support, and no `hf.co/...` auto-pulled GGUF does.
+2. **Tool-call normalizer wired into the response path** (`bench/scripts/tool_call_normalizer.py`, vendored from the `gemma4_wClaude` sibling project). Synthesizes OpenAI `tool_calls[]` from text-wrapped output. New `gemma4_native` strategy added for v2's `<|tool_call>call:fn{k:<|"|>v<|"|>}<tool_call|>` format that leaks when Ollama doesn't run `--jinja` over the Gemma-4 template.
+3. **CamelCase tool-name aliases** (`WriteFile` → `write_file`, `RunBash` → `run_bash`, etc) — community fine-tunes routinely emit the wrong case and would otherwise burn turns on misspells.
+
+`NIM_TIMEOUT=600`, 15-turn cap, default Ollama runtime (`OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`, full GPU offload on RTX 3080). `MAX_FAIL=6` — we record outcomes rather than gate.
+
+| Model | Score | Wall (sum) | Notes |
+|---|---|---|---|
+| [yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2](https://huggingface.co/yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2-GGUF) (Q4_K_M, local) | **3 / 6** | 755 s | First community ≤12 B to clear three stress tasks on this suite. PASS: 01_lru_cache (3 turns / 21 s), 02_toposort (4 / 21), 03_rate_limiter (8 / 50). FAIL: 04_btree (5 / 142 — quant CoT drift), 05_minigrep (6 / 449 — hit timeout territory), 99_refactor (4 / 74, 1 tool-error — gave up before the 6-file split). Confirms the model card's tau2-bench "agentic" claim is real and degrades on multi-file / large-state tasks. v2 emits Gemma-4 native `<\|tool_call>call:fn{...}<tool_call\|>` content when warmed up; the new `gemma4_native` normalizer strategy parses it cleanly. |
+| [yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1](https://huggingface.co/yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1-GGUF) (Q4_K_M, local) | **1 / 6** | 241 s | **No change vs v0.2 — confirms the regression is the model itself, not the harness.** The new normalizer DID fire (smoke PASS, and `_strat_tag_pycall` matched mid-loop), so this is post-tool-call failure: v1's card explicitly states **no tool-use training**, and the model emits short bursts and stops (median 2 turns/task). PASS: 03_rate_limiter only (single-shot solvable in 1 tool call). Retire v1 from agentic eval. |
+| yuxinlu1/gemma-4-12B-coder-fable5-composer2.5-v1 (Q8_0, local) | 0 / 6 | 346 s | Q8_0 doesn't help — same lack-of-tool-loop training as Q4_K_M, with slower turns. Confirms quant level isn't the lever for v1. |
+| yuxinlu1/gemma-4-12B-agentic-fable5-composer2.5-v2-3.5x-tau2 (Q8_0, local) | NO-SCORE × 6 | n/a | Cold-load + Q8_0 inference latency caused `score.sh` never to write PASS/FAIL into the agent log. Needs rerun with model pre-warmed (`ollama run <tag> "warmup" </dev/null` before the sweep) — kept as a placeholder in the local-bench overview at `docs/benchmarks/local/`. |
+| [empero-ai/Qwythos-9B-Claude-Mythos-5-1M](https://huggingface.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF) (any quant) | blocked | n/a | Ollama 0.20.2's bundled llama.cpp fails to load with `error loading model architecture: unknown model architecture: 'qwen35'`. The GGUF declares `qwen35.ssm.*` (Qwen 3.5 with the model's own SSM layers); not yet recognised. Re-test on `ollama` upgrade, or run via a recent `llama-server` build directly. |
+
+### Cross-cutting findings (v0.3)
+
+- **v1 vs v2 separation is real.** v1 (coder, no tool-use training) is a code-completion model dressed as an agent; v2 (agentic + tau2-trained) clears three tasks at Q4_K_M. The v0.2 read of "v1 was bad because of tool-call format" was incomplete — format is now fixed (normalizer + embedded tools), but v1 still doesn't sustain the loop. Pick v2 for agent work.
+- **Ollama-as-host friction is template-driven, not capability-driven.** Every community GGUF pulled from `hf.co/...` arrives without a tool-aware Modelfile, so Ollama rejects requests with the `tools` field. The fix is harness-side (embed tools in the system message + normalize wrapped output) rather than per-model Modelfile rewriting.
+- **`qwen35` arch is the next porting blocker.** Qwythos can't run on this stack until ollama's bundled llama.cpp learns the architecture. Re-evaluate when ollama ships a build off a llama.cpp commit that supports it.
+
 ## v0.2 results — NIM availability snapshot + first self-host (2026-06-15)
 
 Re-run after observing widespread free-tier flakiness (TTFB-then-hang on Kimi, Gemma-4, Llama-3.3-70b cold paths; 410 Gone on previously-listed models). Same suite, same 15-turn cap, NIM models hit upstream directly. Local Gemma-4 went through llama.cpp at `:8085` with `NIM_TIMEOUT=600` and `-c 32768`.

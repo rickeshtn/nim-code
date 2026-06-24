@@ -2,7 +2,11 @@
 # Run the stress_tests suite headlessly against one model.
 # Usage:  MODEL=meta/llama-3.3-70b-instruct ./scripts/run_suite.sh
 set -u
-. ~/.config/nim-code/env
+# Source the NIM key env only when not explicitly opted out (local-model runs
+# set NIM_NO_SOURCE_ENV=1 because they hit a no-auth localhost endpoint).
+if [ -z "${NIM_NO_SOURCE_ENV:-}" ] && [ -r ~/.config/nim-code/env ]; then
+  . ~/.config/nim-code/env
+fi
 
 MODEL="${MODEL:-meta/llama-3.3-70b-instruct}"
 MAX_TURNS="${MAX_TURNS:-15}"
