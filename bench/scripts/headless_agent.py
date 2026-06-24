@@ -33,6 +33,16 @@ except ImportError:
 
 NIM_URL = os.environ.get("NIM_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
 _LOCAL_ENDPOINT = any(h in NIM_URL for h in ("127.0.0.1", "localhost", "0.0.0.0"))
+# Local-endpoint tools handling:
+#   "embed"   — splice tool schemas into the system message; drop the OpenAI
+#               tools field. Required for Ollama, which rejects the tools
+#               field for community GGUFs without tool-aware Modelfiles.
+#   "native"  — send the OpenAI tools field unchanged. Required for
+#               llama-server with --jinja (Qwen3.5/Qwythos chat templates
+#               render tools into the format the model was trained on,
+#               yielding a clean tool_calls[] response). Also fine for any
+#               OpenAI-compat endpoint that supports tools natively.
+_LOCAL_TOOLS_MODE = os.environ.get("BENCH_LOCAL_TOOLS_MODE", "embed").lower()
 
 TOOLS = [
     {"type": "function", "function": {
@@ -177,7 +187,7 @@ def _local_messages_with_embedded_tools(messages):
 
 
 def call_nim(api_key, model, messages, retries=3):
-    if _LOCAL_ENDPOINT:
+    if _LOCAL_ENDPOINT and _LOCAL_TOOLS_MODE == "embed":
         body = json.dumps({
             "model": model,
             "messages": _local_messages_with_embedded_tools(messages),
