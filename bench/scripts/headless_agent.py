@@ -187,11 +187,12 @@ def _local_messages_with_embedded_tools(messages):
 
 
 def call_nim(api_key, model, messages, retries=3):
+    _max_tok = int(os.environ.get("BENCH_MAX_TOKENS", "8192"))
     if _LOCAL_ENDPOINT and _LOCAL_TOOLS_MODE == "embed":
         body = json.dumps({
             "model": model,
             "messages": _local_messages_with_embedded_tools(messages),
-            "max_tokens": 4096,
+            "max_tokens": _max_tok,
             "temperature": 0.2,
         }).encode()
     else:
@@ -200,7 +201,7 @@ def call_nim(api_key, model, messages, retries=3):
             "messages": messages,
             "tools": TOOLS,
             "tool_choice": "auto",
-            "max_tokens": 4096,
+            "max_tokens": _max_tok,
             "temperature": 0.2,
         }).encode()
     headers = {"Content-Type": "application/json"}
@@ -225,16 +226,92 @@ def call_nim(api_key, model, messages, retries=3):
     raise RuntimeError(f"NIM call failed after {retries} retries: {last_err}")
 
 
+def _approx_tokens(messages):
+    """~4 chars/token, +50 overhead per message for role/tool_calls boilerplate."""
+    n = 0
+    for m in messages:
+        n += len(str(m.get("content", ""))) // 4 + 50
+        for tc in (m.get("tool_calls") or []):
+            n += len(str(tc)) // 4
+    return n
+
+
+def _summarize_chunk(chunk_messages, model, api_key):
+    """One model call to compress a slice of the transcript into a short
+    abstract. Independent of the bench tools — just plain chat."""
+    transcript = []
+    for m in chunk_messages:
+        role = m.get("role", "?")
+        body = m.get("content", "")[:1500]
+        if m.get("tool_calls"):
+            body = (body + "\n" if body else "") + "tool_calls=" + str(m["tool_calls"])[:800]
+        transcript.append(f"[{role}] {body}")
+    summary_messages = [
+        {"role": "system",
+         "content": ("You are summarising an agent transcript so the agent can continue "
+                     "the task with a smaller context window. Preserve: files written and "
+                     "their paths, exact function signatures created, current bug/error, "
+                     "test results, the immediate next step. Drop chit-chat. Output 200 words max.")},
+        {"role": "user", "content": "\n\n".join(transcript)},
+    ]
+    body = json.dumps({"model": model, "messages": summary_messages,
+                       "max_tokens": 800, "temperature": 0.0}).encode()
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(NIM_URL, data=body, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=int(os.environ.get("NIM_TIMEOUT", "120"))) as resp:
+            r = json.loads(resp.read())
+        return r["choices"][0]["message"].get("content") or "[summary unavailable]"
+    except Exception as e:
+        return f"[summary failed: {e!r}]"
+
+
+def _compact_recursive(messages, model, api_key, budget, depth=0):
+    """Recursive context compaction. If the middle slice is itself larger
+    than half the budget, recurse on it before summarising — that's the
+    'recursion over context' lever.
+
+    Keeps the system prompt and the most recent 2 messages intact, replaces
+    the middle with a summary. Returns the new message list.
+    """
+    if _approx_tokens(messages) <= budget or len(messages) <= 4 or depth > 4:
+        return messages
+    head = messages[:1]            # system prompt — never drop
+    tail = messages[-2:]           # latest user + assistant — never drop
+    middle = messages[1:-2]
+    if not middle:
+        return messages
+    # If middle alone exceeds half the budget, recurse on it first.
+    if _approx_tokens(middle) > budget // 2 and len(middle) > 4:
+        middle = _compact_recursive(middle, model, api_key, budget // 2, depth + 1)
+    summary = _summarize_chunk(middle, model, api_key)
+    print(f"[ctx-recursion d={depth}] compacted {len(middle)} msgs "
+          f"({_approx_tokens(middle)} -> {len(summary)//4} approx tokens)", flush=True)
+    return head + [{
+        "role": "user",
+        "content": f"[Earlier turns summarised; see below for the active state]\n\n{summary}",
+    }] + tail
+
+
 def run(workdir, prompt, model, api_key, max_turns):
     workdir = pathlib.Path(workdir).resolve()
     workdir.mkdir(parents=True, exist_ok=True)
+    ctx_budget = int(os.environ.get("BENCH_CONTEXT_BUDGET", "0"))  # 0 = disabled
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": prompt},
     ]
-    stats = {"turns": 0, "tool_calls": 0, "tool_errors": 0, "finished": False}
+    stats = {"turns": 0, "tool_calls": 0, "tool_errors": 0, "finished": False,
+             "ctx_compactions": 0}
     for turn in range(1, max_turns + 1):
         stats["turns"] = turn
+        # Recursive context compaction before each call when over budget.
+        if ctx_budget > 0 and _approx_tokens(messages) > ctx_budget:
+            print(f"[ctx-recursion] turn {turn}: {_approx_tokens(messages)} tokens > budget {ctx_budget}, compacting", flush=True)
+            messages = _compact_recursive(messages, model, api_key, ctx_budget)
+            stats["ctx_compactions"] += 1
         print(f"\n=== turn {turn} ===", flush=True)
         resp = call_nim(api_key, model, messages)
         msg = resp["choices"][0]["message"]
